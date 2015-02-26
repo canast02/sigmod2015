@@ -1,4 +1,8 @@
 #!/bin/bash
+#Clean
+cd src
+make clean
+cd ..
 # Make script executable from any location
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 cd ${DIR}

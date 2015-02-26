@@ -34,6 +34,11 @@
 #include <vector>
 #include <cassert>
 #include <cstdint>
+#include <unordered_map>
+
+#define OPERATORS 6
+//#define DEBUG
+
 //---------------------------------------------------------------------------
 using namespace std;
 //---------------------------------------------------------------------------
@@ -41,7 +46,14 @@ using namespace std;
 //---------------------------------------------------------------------------
 struct MessageHead {
 	/// Message types
-	enum Type : uint32_t { Done, DefineSchema, Transaction, ValidationQueries, Flush, Forget };
+	enum Type
+		: uint32_t {Done,
+		DefineSchema,
+		Transaction,
+		ValidationQueries,
+		Flush,
+		Forget
+	};
 	/// Total message length, excluding this head
 	uint32_t messageLen;
 	/// The message type
@@ -59,7 +71,7 @@ struct Transaction {
 	/// The transaction id. Monotonic increasing
 	uint64_t transactionId;
 	/// The operation counts
-	uint32_t deleteCount,insertCount;
+	uint32_t deleteCount, insertCount;
 	/// A sequence of transaction operations. Deletes first, total deleteCount+insertCount operations
 	char operations[];
 };
@@ -86,7 +98,7 @@ struct ValidationQueries {
 	/// The validation id. Monotonic increasing
 	uint64_t validationId;
 	/// The transaction range
-	uint64_t from,to;
+	uint64_t from, to;
 	/// The query count
 	uint32_t queryCount;
 	/// The queries
@@ -97,7 +109,14 @@ struct Query {
 	/// A column description
 	struct Column {
 		/// Support operations
-		enum Op : uint32_t { Equal, NotEqual, Less, LessOrEqual, Greater, GreaterOrEqual };
+		enum Op
+			: uint32_t {Equal,
+			NotEqual,
+			Less,
+			LessOrEqual,
+			Greater,
+			GreaterOrEqual
+		};
 		/// The column id
 		uint32_t column;
 		/// The operations
@@ -112,7 +131,9 @@ struct Query {
 	/// The bindings
 	Column columns[];
 };
-bool queryComparator (const Query* q1, const Query* q2) { return (q1->columnCount < q2->columnCount); }
+bool queryComparator(const Query* q1, const Query* q2) {
+	return (q1->columnCount < q2->columnCount);
+}
 //---------------------------------------------------------------------------
 struct Flush {
 	/// All validations to this id (including) must be answered
@@ -127,32 +148,31 @@ struct Forget {
 // Begin reference implementation
 //---------------------------------------------------------------------------
 static vector<uint32_t> schema;
-static vector<map<uint32_t,vector<uint64_t>>> relations;
+static vector<map<uint32_t, vector<uint64_t>>> relations;
 //---------------------------------------------------------------------------
-static map<uint64_t,map<uint32_t,vector<vector<uint64_t>>>> transactionHistory;
-static map<uint64_t,bool> queryResults;
+static map<uint64_t, map<uint32_t, vector<vector<uint64_t>>> > transactionHistory;
+static map<uint64_t, bool> queryResults;
 //---------------------------------------------------------------------------
-//#define DEBUG
-static void processDefineSchema(const DefineSchema& d)
-{
+
+static void processDefineSchema(const DefineSchema& d) {
 #ifdef DEBUG
 	cerr << "define schema [" << d.relationCount << " ";
 	for(auto& c: d.columnCounts)
-		cerr << c << " ";
+	cerr << c << " ";
 	cerr << endl;
 #endif
 	schema.clear();
-	schema.insert(schema.begin(),d.columnCounts,d.columnCounts+d.relationCount);
+	schema.insert(schema.begin(), d.columnCounts,
+			d.columnCounts + d.relationCount);
 	relations.clear();
 	relations.resize(d.relationCount);
 }
 //---------------------------------------------------------------------------
-static void processTransaction(const Transaction& t)
-{
+static void processTransaction(const Transaction& t) {
 #ifdef DEBUG
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " " << t.insertCount << "]" << endl;
 #endif
-	map<uint32_t,vector<vector<uint64_t>>> operations;
+	map<uint32_t, vector<vector<uint64_t>>> operations;
 	const char* reader=t.operations;
 
 	// Delete all indicated tuples
@@ -189,28 +209,205 @@ static void processTransaction(const Transaction& t)
 
 	transactionHistory[t.transactionId]=move(operations);
 }
+
+static bool isQueryValid(const Query* q) {
+
+	std::unordered_map<uint32_t, const Query::Column *[OPERATORS]> opsMap;
+
+	for (unsigned i = 0; i < q->columnCount; i++) {
+		auto curQueryOp = &(q->columns[i]);
+		//for each column check
+		if (opsMap.find(curQueryOp->column) == opsMap.end()) {
+			for (int i = 0; i < OPERATORS; ++i) {
+				opsMap[curQueryOp->column][i] = NULL;
+			}
+			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
+		} else {
+			//Get the column from the columns map
+			const Query::Column ** opColumn = opsMap[curQueryOp->column];
+			//check the operations of a specific column
+			switch (curQueryOp->op) {
+			case Query::Column::Equal:
+				//Check c0==<value1> && c0==<value2>, value1!=value2
+				if (opColumn[curQueryOp->op] == NULL) {
+					//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				if (opColumn[Query::Column::Equal] != NULL) {
+					if (opColumn[Query::Column::Equal]->value
+							!= curQueryOp->value) {
+#ifdef DEBUG
+						cerr << "==" << endl;
+#endif
+						return false;
+					}
+				}
+				//Check c0!=<value1> && c0==<value2>, value1==value2
+				if (opColumn[Query::Column::NotEqual] != NULL) {
+					if (opColumn[Query::Column::NotEqual]->value
+							== curQueryOp->value) {
+#ifdef DEBUG
+						cerr << "!=" << endl;
+#endif
+						return false;
+					}
+				}
+				//Check c0<=<value1> && c0==<value2>, value1<value2
+				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+					if (opColumn[Query::Column::LessOrEqual]->value
+							< curQueryOp->value) {
+#ifdef DEBUG
+						cerr << "<=" << endl;
+#endif
+						return false;
+					}
+				}
+				//Check c0>=<value1> && c0==<value2>, value1==value2
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+
+					if (opColumn[Query::Column::GreaterOrEqual]->value
+							> curQueryOp->value) {
+#ifdef DEBUG
+						cerr << ">=" << endl;
+#endif
+						return false;
+					}
+				}
+				//Check c0<<value1> && c0==<value2>, value1<=value2
+				if (opColumn[Query::Column::Less] != NULL) {
+					if (opColumn[Query::Column::Less]->value
+							<= curQueryOp->value) {
+#ifdef DEBUG
+						cerr << "<" << endl;
+#endif
+						return false;
+					}
+				}
+				//Check c0><value1> && c0==<value2>, value1>=value2
+				if (opColumn[Query::Column::Greater] != NULL) {
+					if (opColumn[Query::Column::Greater]->value
+							>= curQueryOp->value) {
+#ifdef DEBUG
+						cerr << ">" << endl;
+#endif
+						return false;
+					}
+				}
+				break;
+
+				//Dont do anything
+			case Query::Column::NotEqual:
+
+				if (opColumn[curQueryOp->op] == NULL) {
+//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				break;
+			case Query::Column::Less:
+				if (opColumn[curQueryOp->op] == NULL) {
+//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				//Check c0==value1> && c0<<value2>, value1>=value2
+				if (opColumn[Query::Column::Equal] != NULL) {
+					if (opColumn[Query::Column::Equal]->value
+							>= curQueryOp->value) {
+						return false;
+					}
+
+				}
+
+				//Check c0!=<value1> && c0<<value2>, value1<=value2
+				if (opColumn[Query::Column::NotEqual] != NULL) {
+					if (opColumn[Query::Column::NotEqual]->value
+							<= curQueryOp->value) {
+						//TODO: remove != from queries
+					}
+				}
+
+				//Check c0<=<value1> && c0<<value2>
+				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+					//TODO: keep the smallest one from queries
+				}
+
+				//Check c0>=<value1> && c0<<value2>, value1>=value2
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+
+					if (opColumn[Query::Column::GreaterOrEqual]->value
+							>= curQueryOp->value) {
+						return false;
+					}
+				}
+				//Check c0<<value1> && c0<<value2>
+				if (opColumn[Query::Column::Less] != NULL) {
+					//TODO: Keep the smallest
+				}
+				//Check c0><value1> && c0<<value2>, value1>=value2
+				if (opColumn[Query::Column::Greater] != NULL) {
+					if (opColumn[Query::Column::Greater]->value
+							>= curQueryOp->value) {
+						return false;
+					}
+				}
+				break;
+			case Query::Column::LessOrEqual:
+				if (opColumn[curQueryOp->op] == NULL) {
+//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				break;
+			case Query::Column::Greater:
+				if (opColumn[curQueryOp->op] == NULL) {
+//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				break;
+			case Query::Column::GreaterOrEqual:
+				if (opColumn[curQueryOp->op] == NULL) {
+//save
+					opColumn[curQueryOp->op] = curQueryOp;
+				}
+				break;
+			}
+
+		}
+	}
+	return true;
+
+}
+
 //---------------------------------------------------------------------------
-static void processValidationQueries(const ValidationQueries& v)
-{
+static void processValidationQueries(const ValidationQueries& v) {
 #ifdef DEBUG
 	cerr << "validation [" << v.validationId << " " << v.from << " " << v.to << " " << v.queryCount << "]" << endl;
 	unsigned qId = 0;
 #endif
-	auto from=transactionHistory.lower_bound(v.from);
-	auto to=transactionHistory.upper_bound(v.to);
-	bool conflict=false;
-	const char* reader=v.queries;
+	auto from = transactionHistory.lower_bound(v.from);
+	auto to = transactionHistory.upper_bound(v.to);
+	bool conflict = false;
+	const char* reader = v.queries;
 
+	///////////////////////////////////////////////////////////////////////
+	//Sort the query based on the validation's query count
+	///////////////////////////////////////////////////////////////////////
 	vector<const Query*> queries;
-	for (unsigned index=0;index!=v.queryCount;++index) {
-		auto q=reinterpret_cast<const Query*>(reader);
-		queries.push_back(q);
-		reader+=sizeof(Query)+(sizeof(Query::Column)*q->columnCount);
+	int pruned = 0;
+	for (unsigned index = 0; index != v.queryCount; ++index) {
+		auto q = reinterpret_cast<const Query*>(reader);
+		if (isQueryValid(q)) {
+			queries.push_back(q);
+		}
+//		else {
+//			++pruned;
+//		}
+		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
+	//cerr << pruned << "|" << v.queryCount << endl;
+	std::sort(queries.begin(), queries.end(), queryComparator);
+	///////////////////////////////////////////////////////////////////////
 
-	std::sort(queries.begin(),queries.end(),queryComparator);
-
-	for (auto q: queries) {
+	//Itarates through all sorted queries
+	for (auto q : queries) {
 
 #ifdef DEBUG
 		cerr << "q" << qId << "[ ";
@@ -219,12 +416,12 @@ static void processValidationQueries(const ValidationQueries& v)
 		for(unsigned i=0; i<q->columnCount; i++) {
 			cerr << "c" << q->columns[i].column << " ";
 			switch (q->columns[i].op) {
-			case Query::Column::Equal: cerr << "= "; break;
-			case Query::Column::NotEqual: cerr << "!= "; break;
-			case Query::Column::Less: cerr << "< "; break;
-			case Query::Column::LessOrEqual: cerr << "<= "; break;
-			case Query::Column::Greater: cerr << "> "; break;
-			case Query::Column::GreaterOrEqual: cerr << ">= "; break;
+				case Query::Column::Equal: cerr << "= "; break;
+				case Query::Column::NotEqual: cerr << "!= "; break;
+				case Query::Column::Less: cerr << "< "; break;
+				case Query::Column::LessOrEqual: cerr << "<= "; break;
+				case Query::Column::Greater: cerr << "> "; break;
+				case Query::Column::GreaterOrEqual: cerr << ">= "; break;
 			}
 			cerr << q->columns[i].value << " ";
 		}
@@ -232,29 +429,44 @@ static void processValidationQueries(const ValidationQueries& v)
 		cerr << "]" << endl;
 #endif
 
-		for (auto iter=from;iter!=to;++iter) {
+		for (auto iter = from; iter != to; ++iter) {
 
-			for (auto& tuple:(*iter).second[q->relationId]) {
+			for (auto& tuple : (*iter).second[q->relationId]) {
 
-				bool match=true;
+				bool match = true;
 				auto c = q->columns;
 				auto cLimit = c + q->columnCount;
-				for (;c!=cLimit;++c) {
-					uint64_t tupleValue=tuple[c->column];
-					uint64_t queryValue=c->value;
-					bool result=false;
+				for (; c != cLimit; ++c) {
+					uint64_t tupleValue = tuple[c->column];
+					uint64_t queryValue = c->value;
+					bool result = false;
 					switch (c->op) {
-					case Query::Column::Equal: result=(tupleValue==queryValue); break;
-					case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
-					case Query::Column::Less: result=(tupleValue<queryValue); break;
-					case Query::Column::LessOrEqual: result=(tupleValue<=queryValue); break;
-					case Query::Column::Greater: result=(tupleValue>queryValue); break;
-					case Query::Column::GreaterOrEqual: result=(tupleValue>=queryValue); break;
+					case Query::Column::Equal:
+						result = (tupleValue == queryValue);
+						break;
+					case Query::Column::NotEqual:
+						result = (tupleValue != queryValue);
+						break;
+					case Query::Column::Less:
+						result = (tupleValue < queryValue);
+						break;
+					case Query::Column::LessOrEqual:
+						result = (tupleValue <= queryValue);
+						break;
+					case Query::Column::Greater:
+						result = (tupleValue > queryValue);
+						break;
+					case Query::Column::GreaterOrEqual:
+						result = (tupleValue >= queryValue);
+						break;
 					}
-					if (!result) { match=false; break; }
+					if (!result) {
+						match = false;
+						break;
+					}
 				}
 				if (match) {
-					conflict=true;
+					conflict = true;
 					break;
 				}
 			}
@@ -269,57 +481,75 @@ static void processValidationQueries(const ValidationQueries& v)
 		}
 	}
 
-
-	queryResults[v.validationId]=conflict;
+	queryResults[v.validationId] = conflict;
 }
 //---------------------------------------------------------------------------
-static void processFlush(const Flush& f)
-{
+static void processFlush(const Flush& f) {
 #ifdef DEBUG
 	cerr << "flush [" << f.validationId << "]" << endl;
 #endif
-	while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
-		char c='0'+(*queryResults.begin()).second;
-		cout.write(&c,1);
+	while ((!queryResults.empty())
+			&& ((*queryResults.begin()).first <= f.validationId)) {
+		char c = '0' + (*queryResults.begin()).second;
+		cout.write(&c, 1);
 		queryResults.erase(queryResults.begin());
 	}
 	cout.flush();
 }
 //---------------------------------------------------------------------------
-static void processForget(const Forget& f)
-{
+static void processForget(const Forget& f) {
 #ifdef DEBUG
 	cerr << "forget [" << f.transactionId << "]" << endl;
 #endif
-	while ((!transactionHistory.empty())&&((*transactionHistory.begin()).first<=f.transactionId))
+	while ((!transactionHistory.empty())
+			&& ((*transactionHistory.begin()).first <= f.transactionId))
 		transactionHistory.erase(transactionHistory.begin());
 }
 //---------------------------------------------------------------------------
 // Read the message body and cast it to the desired type
-template<typename Type> static const Type& readBody(istream& in,vector<char>& buffer,uint32_t len) {
+template<typename Type> static const Type& readBody(istream& in,
+		vector<char>& buffer, uint32_t len) {
 	buffer.resize(len);
-	in.read(buffer.data(),len);
+	in.read(buffer.data(), len);
 	return *reinterpret_cast<const Type*>(buffer.data());
 }
 //---------------------------------------------------------------------------
-int main()
-{
+int main() {
 	vector<char> message;
 	while (true) {
-		// Retrieve the message
+// Retrieve the message
 		MessageHead head;
-		cin.read(reinterpret_cast<char*>(&head),sizeof(head));
-		if (!cin) { cerr << "read error" << endl; abort(); } // crude error handling, should never happen
+		cin.read(reinterpret_cast<char*>(&head), sizeof(head));
+		if (!cin) {
+			cerr << "read error" << endl;
+			abort();
+		} // crude error handling, should never happen
 
-		// And interpret it
+// And interpret it
 		switch (head.type) {
-		case MessageHead::Done: return 0;
-		case MessageHead::DefineSchema: processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen)); break;
-		case MessageHead::Transaction: processTransaction(readBody<Transaction>(cin,message,head.messageLen)); break;
-		case MessageHead::ValidationQueries: processValidationQueries(readBody<ValidationQueries>(cin,message,head.messageLen)); break;
-		case MessageHead::Flush: processFlush(readBody<Flush>(cin,message,head.messageLen)); break;
-		case MessageHead::Forget: processForget(readBody<Forget>(cin,message,head.messageLen)); break;
-		default: cerr << "malformed message" << endl; abort(); // crude error handling, should never happen
+		case MessageHead::Done:
+			return 0;
+		case MessageHead::DefineSchema:
+			processDefineSchema(
+					readBody<DefineSchema>(cin, message, head.messageLen));
+			break;
+		case MessageHead::Transaction:
+			processTransaction(
+					readBody<Transaction>(cin, message, head.messageLen));
+			break;
+		case MessageHead::ValidationQueries:
+			processValidationQueries(
+					readBody<ValidationQueries>(cin, message, head.messageLen));
+			break;
+		case MessageHead::Flush:
+			processFlush(readBody<Flush>(cin, message, head.messageLen));
+			break;
+		case MessageHead::Forget:
+			processForget(readBody<Forget>(cin, message, head.messageLen));
+			break;
+		default:
+			cerr << "malformed message" << endl;
+			abort(); // crude error handling, should never happen
 		}
 	}
 }
