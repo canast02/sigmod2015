@@ -294,7 +294,7 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				break;
-
+////////////////////////////////////////////////////////////////////////////////////////
 				//Dont do anything
 			case Query::Column::NotEqual:
 
@@ -303,6 +303,7 @@ static bool isQueryValid(const Query* q) {
 					opColumn[curQueryOp->op] = curQueryOp;
 				}
 				break;
+////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Less:
 				if (opColumn[curQueryOp->op] == NULL) {
 //save
@@ -350,23 +351,153 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				break;
+////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::LessOrEqual:
 				if (opColumn[curQueryOp->op] == NULL) {
-//save
+					//save
 					opColumn[curQueryOp->op] = curQueryOp;
 				}
+				//Check c0==value1> && c0<=<value2>, value1>=value2
+				if (opColumn[Query::Column::Equal] != NULL) {
+					if (opColumn[Query::Column::Equal]->value
+							> curQueryOp->value) {
+						return false;
+					}
+
+				}
+
+				//Check c0!=<value1> && c0<=<value2>, DO NOTHING
+
+				//Check c0<=<value1> && c0<=<value2>
+				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+					//TODO: keep the smallest one from queries
+				}
+
+				//Check c0>=<value1> && c0<=<value2>, value1>value2
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+
+					if (opColumn[Query::Column::GreaterOrEqual]->value
+							> curQueryOp->value) {
+						return false;
+					} else {
+
+						//TODO: if(value1 == value2) replace with equal
+					}
+				}
+				//Check c0<<value1> && c0<=<value2>
+				if (opColumn[Query::Column::Less] != NULL) {
+					//TODO: Keep the smallest
+				}
+
+				//Check c0><value1> && c0<=<value2>, value1>=value2
+				if (opColumn[Query::Column::Greater] != NULL) {
+					if (opColumn[Query::Column::Greater]->value
+							> curQueryOp->value) {
+						return false;
+					}
+				}
 				break;
+				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Greater:
 				if (opColumn[curQueryOp->op] == NULL) {
 //save
 					opColumn[curQueryOp->op] = curQueryOp;
 				}
+
+				//Check c0==value1> && c0><value2>, value1>=value2
+				if (opColumn[Query::Column::Equal] != NULL) {
+					if (opColumn[Query::Column::Equal]->value
+							<= curQueryOp->value) {
+						return false;
+					}
+
+				}
+
+				//Check c0!=<value1> && c0><value2>, value1<=value2
+				if (opColumn[Query::Column::NotEqual] != NULL) {
+					if (opColumn[Query::Column::NotEqual]->value
+							<= curQueryOp->value) {
+						//TODO: remove != from queries
+					}
+				}
+
+				//Check c0<=<value1> && c0><value2>
+				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+					if (opColumn[Query::Column::LessOrEqual]->value
+							<= curQueryOp->value) {
+						return false;
+					}
+				}
+
+				//Check c0>=<value1> && c0><value2>
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+					//TODO: Keep the max
+
+				}
+				//Check c0<<value1> && c0><value2>
+				if (opColumn[Query::Column::Less] != NULL) {
+					if (opColumn[Query::Column::Less]->value
+							<= curQueryOp->value) {
+						return false;
+					}
+				}
+				//Check c0><value1> && c0><value2>
+				if (opColumn[Query::Column::Greater] != NULL) {
+					//TODO: Keep the max
+				}
+
 				break;
+				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::GreaterOrEqual:
 				if (opColumn[curQueryOp->op] == NULL) {
 //save
 					opColumn[curQueryOp->op] = curQueryOp;
 				}
+
+				//Check c0==value1> && c0>=<value2>, value1>value2
+				if (opColumn[Query::Column::Equal] != NULL) {
+					if (opColumn[Query::Column::Equal]->value
+							< curQueryOp->value) {
+						return false;
+					}
+
+				}
+
+				//Check c0!=<value1> && c0>=<value2>, value1<value2
+				if (opColumn[Query::Column::NotEqual] != NULL) {
+					if (opColumn[Query::Column::NotEqual]->value
+							< curQueryOp->value) {
+						//TODO: remove != from queries and (<=) -> (<)
+					}
+				}
+
+				//Check c0<=<value1> && c0><value2>
+				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+					if (opColumn[Query::Column::LessOrEqual]->value
+							< curQueryOp->value) {
+						return false;
+					}else{
+						//TODO: values the same replace them with (==)
+					}
+				}
+
+				//Check c0>=<value1> && c0><value2>
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+					//TODO: Keep the max
+
+				}
+				//Check c0<<value1> && c0><value2>
+				if (opColumn[Query::Column::Less] != NULL) {
+					if (opColumn[Query::Column::Less]->value
+							<= curQueryOp->value) {
+						return false;
+					}
+				}
+				//Check c0><value1> && c0><value2>
+				if (opColumn[Query::Column::Greater] != NULL) {
+					//TODO: Keep the max
+				}
+
 				break;
 			}
 
