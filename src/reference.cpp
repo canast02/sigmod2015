@@ -557,7 +557,7 @@ static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Greater]->value
 							< curQueryOp->value) {
 						opColumn[Query::Column::Greater]->op =
-														Query::Column::Invalid;
+								Query::Column::Invalid;
 					} else {
 						curQueryOp->op = Query::Column::Invalid;
 					}
@@ -589,13 +589,15 @@ static void processValidationQueries(const ValidationQueries& v) {
 	///////////////////////////////////////////////////////////////////////
 	//Sort the query based on the validation's query count
 	///////////////////////////////////////////////////////////////////////
-	vector<const Query*> queries;
+	const Query* queries[v.queryCount];
 	int pruned = 0;
 	int invalid = 0;
+	int pos = 0;
 	for (unsigned index = 0; index != v.queryCount; ++index) {
 		auto q = reinterpret_cast<const Query*>(reader);
 		if (isQueryValid(const_cast<Query*>(q))) {
-			queries.push_back(q);
+			queries[pos] = q;
+			pos++;
 		}
 
 //		else {
@@ -603,12 +605,14 @@ static void processValidationQueries(const ValidationQueries& v) {
 //		}
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
+
 	//cerr << pruned << "|" << v.queryCount << endl;
-	std::sort(queries.begin(), queries.end(), queryComparator);
+	std::sort(queries, queries + pos, queryComparator);
 	///////////////////////////////////////////////////////////////////////
 
 	//Itarates through all sorted queries
-	for (auto q : queries) {
+	for (unsigned index = 0; index != pos; ++index) {
+		auto q = queries[index];
 
 #ifdef DEBUG
 		cerr << "q" << qId << "[ ";
