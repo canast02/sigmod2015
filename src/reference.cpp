@@ -36,7 +36,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#define OPERATORS 6
+#define OPERATORS 7
 //#define DEBUG
 
 //---------------------------------------------------------------------------
@@ -115,7 +115,8 @@ struct Query {
 			Less,
 			LessOrEqual,
 			Greater,
-			GreaterOrEqual
+			GreaterOrEqual,
+			Invalid
 		};
 		/// The column id
 		uint32_t column;
@@ -210,9 +211,9 @@ static void processTransaction(const Transaction& t) {
 	transactionHistory[t.transactionId]=move(operations);
 }
 
-static bool isQueryValid(const Query* q) {
+static bool isQueryValid(Query* q) {
 
-	std::unordered_map<uint32_t, const Query::Column *[OPERATORS]> opsMap;
+	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
 
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
@@ -224,7 +225,14 @@ static bool isQueryValid(const Query* q) {
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
 		} else {
 			//Get the column from the columns map
-			const Query::Column ** opColumn = opsMap[curQueryOp->column];
+			Query::Column ** opColumn = opsMap[curQueryOp->column];
+
+			//Fill the operation list
+			if (opColumn[curQueryOp->op] == NULL) {
+				//save
+				opColumn[curQueryOp->op] = curQueryOp;
+			}
+
 			//check the operations of a specific column
 			switch (curQueryOp->op) {
 			case Query::Column::Equal:
@@ -297,18 +305,9 @@ static bool isQueryValid(const Query* q) {
 ////////////////////////////////////////////////////////////////////////////////////////
 				//Dont do anything
 			case Query::Column::NotEqual:
-
-				if (opColumn[curQueryOp->op] == NULL) {
-//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
 				break;
 ////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Less:
-				if (opColumn[curQueryOp->op] == NULL) {
-//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
 				//Check c0==value1> && c0<<value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL) {
 					if (opColumn[Query::Column::Equal]->value
@@ -321,14 +320,23 @@ static bool isQueryValid(const Query* q) {
 				//Check c0!=<value1> && c0<<value2>, value1<=value2
 				if (opColumn[Query::Column::NotEqual] != NULL) {
 					if (opColumn[Query::Column::NotEqual]->value
-							<= curQueryOp->value) {
+							> curQueryOp->value) {
 						//TODO: remove != from queries
+						opColumn[Query::Column::NotEqual]->op =
+								Query::Column::Invalid;
 					}
 				}
 
 				//Check c0<=<value1> && c0<<value2>
 				if (opColumn[Query::Column::LessOrEqual] != NULL) {
 					//TODO: keep the smallest one from queries
+					if (opColumn[Query::Column::LessOrEqual]->value
+							>= curQueryOp->value) {
+						opColumn[Query::Column::LessOrEqual]->op =
+								Query::Column::Invalid;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 
 				//Check c0>=<value1> && c0<<value2>, value1>=value2
@@ -340,8 +348,17 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				//Check c0<<value1> && c0<<value2>
-				if (opColumn[Query::Column::Less] != NULL) {
+				if (opColumn[Query::Column::Less] != NULL
+						&& opColumn[Query::Column::Less] != curQueryOp) {
 					//TODO: Keep the smallest
+					if (curQueryOp->value
+							<= opColumn[Query::Column::Less]->value) {
+						opColumn[Query::Column::Less]->op =
+								Query::Column::Invalid;
+						opColumn[Query::Column::Less] = curQueryOp;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 				//Check c0><value1> && c0<<value2>, value1>=value2
 				if (opColumn[Query::Column::Greater] != NULL) {
@@ -351,12 +368,8 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				break;
-////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::LessOrEqual:
-				if (opColumn[curQueryOp->op] == NULL) {
-					//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
 				//Check c0==value1> && c0<=<value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL) {
 					if (opColumn[Query::Column::Equal]->value
@@ -366,11 +379,28 @@ static bool isQueryValid(const Query* q) {
 
 				}
 
-				//Check c0!=<value1> && c0<=<value2>, DO NOTHING
+				//Check c0!=<value1> && c0<=<value2> value1<=value2
+				if (opColumn[Query::Column::NotEqual] != NULL) {
+					if (opColumn[Query::Column::NotEqual]->value
+							> curQueryOp->value) {
+						//TODO: remove != from queries
+						opColumn[Query::Column::NotEqual]->op =
+								Query::Column::Invalid;
+					}
+				}
 
 				//Check c0<=<value1> && c0<=<value2>
-				if (opColumn[Query::Column::LessOrEqual] != NULL) {
+				if (opColumn[Query::Column::LessOrEqual] != NULL
+						&& opColumn[Query::Column::LessOrEqual] != curQueryOp) {
 					//TODO: keep the smallest one from queries
+					if (opColumn[Query::Column::LessOrEqual]->value
+							>= curQueryOp->value) {
+						opColumn[Query::Column::LessOrEqual]->op =
+								Query::Column::Invalid;
+						opColumn[Query::Column::LessOrEqual] = curQueryOp;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 
 				//Check c0>=<value1> && c0<=<value2>, value1>value2
@@ -384,9 +414,17 @@ static bool isQueryValid(const Query* q) {
 						//TODO: if(value1 == value2) replace with equal
 					}
 				}
+
 				//Check c0<<value1> && c0<=<value2>
 				if (opColumn[Query::Column::Less] != NULL) {
 					//TODO: Keep the smallest
+					if (opColumn[Query::Column::Less]->value
+							> curQueryOp->value) {
+						opColumn[Query::Column::Less]->op =
+								Query::Column::Invalid;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 
 				//Check c0><value1> && c0<=<value2>, value1>=value2
@@ -397,12 +435,8 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				break;
-				////////////////////////////////////////////////////////////////////////////////////////
+//				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Greater:
-				if (opColumn[curQueryOp->op] == NULL) {
-//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
 
 				//Check c0==value1> && c0><value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL) {
@@ -418,6 +452,8 @@ static bool isQueryValid(const Query* q) {
 					if (opColumn[Query::Column::NotEqual]->value
 							<= curQueryOp->value) {
 						//TODO: remove != from queries
+						opColumn[Query::Column::NotEqual]->op =
+								Query::Column::Invalid;
 					}
 				}
 
@@ -432,7 +468,13 @@ static bool isQueryValid(const Query* q) {
 				//Check c0>=<value1> && c0><value2>
 				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
 					//TODO: Keep the max
-
+					if (opColumn[Query::Column::GreaterOrEqual]->value
+							> curQueryOp->value) {
+						curQueryOp->op = Query::Column::Invalid;
+					} else {
+						opColumn[Query::Column::GreaterOrEqual]->op =
+								Query::Column::Invalid;
+					}
 				}
 				//Check c0<<value1> && c0><value2>
 				if (opColumn[Query::Column::Less] != NULL) {
@@ -442,18 +484,22 @@ static bool isQueryValid(const Query* q) {
 					}
 				}
 				//Check c0><value1> && c0><value2>
-				if (opColumn[Query::Column::Greater] != NULL) {
+				if (opColumn[Query::Column::Greater] != NULL
+						&& opColumn[Query::Column::Greater] != curQueryOp) {
 					//TODO: Keep the max
+					if (opColumn[Query::Column::Greater]->value
+							< curQueryOp->value) {
+						opColumn[Query::Column::Greater]->op =
+								Query::Column::Invalid;
+						opColumn[Query::Column::Greater] = curQueryOp;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 
 				break;
-				////////////////////////////////////////////////////////////////////////////////////////
+//				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::GreaterOrEqual:
-				if (opColumn[curQueryOp->op] == NULL) {
-//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
-
 				//Check c0==value1> && c0>=<value2>, value1>value2
 				if (opColumn[Query::Column::Equal] != NULL) {
 					if (opColumn[Query::Column::Equal]->value
@@ -468,6 +514,8 @@ static bool isQueryValid(const Query* q) {
 					if (opColumn[Query::Column::NotEqual]->value
 							< curQueryOp->value) {
 						//TODO: remove != from queries and (<=) -> (<)
+						opColumn[Query::Column::NotEqual]->op =
+								Query::Column::Invalid;
 					}
 				}
 
@@ -476,14 +524,24 @@ static bool isQueryValid(const Query* q) {
 					if (opColumn[Query::Column::LessOrEqual]->value
 							< curQueryOp->value) {
 						return false;
-					}else{
+					} else {
 						//TODO: values the same replace them with (==)
 					}
 				}
 
 				//Check c0>=<value1> && c0><value2>
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL) {
+				if (opColumn[Query::Column::GreaterOrEqual] != NULL
+						&& opColumn[Query::Column::GreaterOrEqual]
+								!= curQueryOp) {
 					//TODO: Keep the max
+					if (opColumn[Query::Column::GreaterOrEqual]->value
+							< curQueryOp->value) {
+						opColumn[Query::Column::GreaterOrEqual]->op =
+								Query::Column::Invalid;
+						opColumn[Query::Column::GreaterOrEqual] = curQueryOp;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 
 				}
 				//Check c0<<value1> && c0><value2>
@@ -495,10 +553,20 @@ static bool isQueryValid(const Query* q) {
 				}
 				//Check c0><value1> && c0><value2>
 				if (opColumn[Query::Column::Greater] != NULL) {
-					//TODO: Keep the max
+//					//TODO: Keep the max
+					if (opColumn[Query::Column::Greater]->value
+							< curQueryOp->value) {
+						opColumn[Query::Column::Greater]->op =
+														Query::Column::Invalid;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+					}
 				}
 
 				break;
+
+			case Query::Column::Invalid:
+				continue;
 			}
 
 		}
@@ -523,11 +591,13 @@ static void processValidationQueries(const ValidationQueries& v) {
 	///////////////////////////////////////////////////////////////////////
 	vector<const Query*> queries;
 	int pruned = 0;
+	int invalid = 0;
 	for (unsigned index = 0; index != v.queryCount; ++index) {
 		auto q = reinterpret_cast<const Query*>(reader);
-		if (isQueryValid(q)) {
+		if (isQueryValid(const_cast<Query*>(q))) {
 			queries.push_back(q);
 		}
+
 //		else {
 //			++pruned;
 //		}
@@ -553,6 +623,7 @@ static void processValidationQueries(const ValidationQueries& v) {
 				case Query::Column::LessOrEqual: cerr << "<= "; break;
 				case Query::Column::Greater: cerr << "> "; break;
 				case Query::Column::GreaterOrEqual: cerr << ">= "; break;
+				case Query::Column::Invalid: cerr << ".|. "; break;
 			}
 			cerr << q->columns[i].value << " ";
 		}
@@ -590,6 +661,9 @@ static void processValidationQueries(const ValidationQueries& v) {
 					case Query::Column::GreaterOrEqual:
 						result = (tupleValue >= queryValue);
 						break;
+					case Query::Column::Invalid:
+						//++invalid;
+						continue;
 					}
 					if (!result) {
 						match = false;
@@ -611,6 +685,8 @@ static void processValidationQueries(const ValidationQueries& v) {
 			break;
 		}
 	}
+//	if (invalid > 0)
+//		cerr << "invalid:" << invalid << endl;
 
 	queryResults[v.validationId] = conflict;
 }
