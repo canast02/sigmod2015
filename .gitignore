@@ -4,3 +4,4 @@ testdriver/testdriver
 submission.tar.gz
 *.test
 output*
+gmon.out
