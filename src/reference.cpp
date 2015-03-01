@@ -166,10 +166,10 @@ struct Forget {
 	/// Transactions older than that (including) will not be tested for
 	uint64_t transactionId;
 };
-
+#ifdef DEBUG
 int Equal = 0, NotEqual = 0, Less = 0, LessOrEqual = 0, Greater = 0,
 		GreaterOrEqual = 0, Invalid = 0;
-
+#endif
 //--------------------------------------------------
 // Begin reference implementation
 //--------------------------------------------------
@@ -206,6 +206,7 @@ static void processTransaction(const Transaction& t) {
 	<< t.insertCount << "]" << endl;
 #endif
 	unordered_map<uint32_t, vector<vector<uint64_t>>> operations;
+	operations.reserve(t.deleteCount + t.insertCount);
 	const char* reader = t.operations;
 
 	// Delete all indicated tuples
@@ -234,6 +235,7 @@ static void processTransaction(const Transaction& t) {
 				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
 				values += schema[o.relationId]) {
 			vector<uint64_t> tuple;
+			tuple.reserve(schema[o.relationId]);
 			tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
 			if (operations.find(o.relationId) == operations.end()) {
 				vector<vector<uint64_t>> v;
@@ -277,7 +279,9 @@ static bool isQueryValid(Query* q) {
 			//check the operations of a specific column
 			switch (curQueryOp->op) {
 			case Query::Column::Equal:
+#ifdef DEBUG
 				++Equal;
+#endif
 				//Check c0==<value1> && c0==<value2>, value1!=value2
 				if (opColumn[curQueryOp->op] == NULL) {
 					//save
@@ -379,11 +383,15 @@ static bool isQueryValid(Query* q) {
 ////////////////////////////////////////////////////////////////////////////////////////
 				//Dont do anything
 			case Query::Column::NotEqual:
+#ifdef DEBUG
 				++NotEqual;
+#endif
 				break;
 ////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Less:
+#ifdef DEBUG
 				++Less;
+#endif
 				//Check c0==value1> && c0<<value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
@@ -462,7 +470,9 @@ static bool isQueryValid(Query* q) {
 				break;
 //////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::LessOrEqual:
+#ifdef DEBUG
 				++LessOrEqual;
+#endif
 				//Check c0==value1> && c0<=<value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
@@ -553,7 +563,9 @@ static bool isQueryValid(Query* q) {
 				break;
 //				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::Greater:
+#ifdef DEBUG
 				++Greater;
+#endif
 				//Check c0==value1> && c0><value2>, value1>=value2
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
@@ -635,7 +647,9 @@ static bool isQueryValid(Query* q) {
 				break;
 //				////////////////////////////////////////////////////////////////////////////////////////
 			case Query::Column::GreaterOrEqual:
+#ifdef DEBUG
 				++GreaterOrEqual;
+#endif
 				//Check c0==value1> && c0>=<value2>, value1>value2
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
