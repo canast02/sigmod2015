@@ -29,12 +29,13 @@
 // For more information, please refer to <http://unlicense.org/>
 //--------------------------------------------------
 #include <iostream>
-#include <map>
 #include <algorithm>    // std::sort
 #include <vector>
 #include <cassert>
 #include <cstdint>
 #include <unordered_map>
+
+#include "btree/btree_map.h"
 
 //#include "ThreadPool.h"
 
@@ -166,10 +167,10 @@ struct Forget {
 //ThreadPool pool(THREADS);
 
 static vector<uint32_t> schema;
-static vector<map<uint32_t, vector<uint64_t>>> relations;
+static unordered_map<uint32_t, vector<uint64_t>> *relations;
 //--------------------------------------------------
-static map<uint64_t, map<uint32_t, vector<vector<uint64_t>>> > transactionHistory;
-static map<uint64_t, bool> queryResults;
+static btree::btree_map<uint64_t, unordered_map<uint32_t, vector<vector<uint64_t>>>> transactionHistory;
+static btree::btree_map<uint64_t, bool> queryResults;
 //--------------------------------------------------
 
 static void processDefineSchema(const DefineSchema& d) {
@@ -182,8 +183,9 @@ static void processDefineSchema(const DefineSchema& d) {
 	schema.clear();
 	schema.insert(schema.begin(), d.columnCounts,
 			d.columnCounts + d.relationCount);
-	relations.clear();
-	relations.resize(d.relationCount);
+
+	relations = new unordered_map<uint32_t, vector<uint64_t>>[d.relationCount];
+
 }
 //--------------------------------------------------
 static void processTransaction(const Transaction& t) {
@@ -191,7 +193,7 @@ static void processTransaction(const Transaction& t) {
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " "
 	<< t.insertCount << "]" << endl;
 #endif
-	map<uint32_t, vector<vector<uint64_t>>> operations;
+	unordered_map<uint32_t, vector<vector<uint64_t>>> operations;
 	const char* reader = t.operations;
 
 	// Delete all indicated tuples
@@ -234,7 +236,7 @@ static void processTransaction(const Transaction& t) {
 
 	transactionHistory[t.transactionId] = move(operations);
 }
-
+//--------------------------------------------------
 static bool isQueryValid(Query* q) {
 	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
 
@@ -679,7 +681,6 @@ static bool isQueryValid(Query* q) {
 
 }
 
-//--------------------------------------------------
 static void processValidationQueries(const ValidationQueries& v) {
 #ifdef DEBUG
 	cerr << "validation [" << v.validationId << " " << v.from << " " << v.to
