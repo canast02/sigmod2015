@@ -206,7 +206,7 @@ static void processTransaction(const Transaction& t) {
 					vector<vector<uint64_t>> v;
 					operations[o.relationId] = move(v);
 				}
-				operations[o.relationId].push_back(
+				operations[o.relationId].emplace_back(
 						move(relations[o.relationId][*key]));
 				relations[o.relationId].erase(*key);
 			}
@@ -227,7 +227,7 @@ static void processTransaction(const Transaction& t) {
 				vector<vector<uint64_t>> v;
 				operations[o.relationId] = move(v);
 			}
-			operations[o.relationId].push_back(tuple);
+			operations[o.relationId].emplace_back(tuple);
 			relations[o.relationId][values[0]] = move(tuple);
 		}
 		reader += sizeof(TransactionOperationInsert)
