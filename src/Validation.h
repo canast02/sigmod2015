@@ -15,8 +15,9 @@
 #include "Structures.h"
 
 inline static bool isQueryValid(Query* q) {
+
 	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
-	std::sort(q->columns, q->columns + q->columnCount, columnOpComparator);
+	//std::sort(q->columns, q->columns + q->columnCount, columnOpComparator);
 
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);

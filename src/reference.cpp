@@ -55,9 +55,9 @@ static btree::btree_map<uint64_t, bool> queryResults;
 
 static void processDefineSchema(const DefineSchema& d) {
 #ifdef DEBUG
-	cerr << "define schema [" << d.relationCount << " ";
-	for (auto& c : d.columnCounts)
-	cerr << c << " ";
+	cerr << "define schema [" << d.relationCount << "] ";
+	for (uint32_t c=0;c!=d.relationCount;++c)
+	cerr << d.columnCounts[c] << " ";
 	cerr << endl;
 #endif
 	schema = new uint32_t[d.relationCount];
