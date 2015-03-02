@@ -5,3 +5,4 @@ submission.tar.gz
 *.test
 output*
 gmon.out
+*~
