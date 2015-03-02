@@ -104,6 +104,14 @@ struct Query {
 	Column columns[];
 };
 
+//--------------------------------------------------
+struct OPtuple {
+	uint64_t** tuples = NULL;
+	int count;
+	OPtuple(void) :
+			count(-1) {
+	}
+};
 
 inline static bool queryComparator(const Query* q1, const Query* q2) {
 	return (q1->columnCount < q2->columnCount);
@@ -130,8 +138,5 @@ struct Forget {
 int Equal = 0, NotEqual = 0, Less = 0, LessOrEqual = 0, Greater = 0,
 GreaterOrEqual = 0, Invalid = 0;
 #endif
-
-
-
 
 #endif /* STRUCTURES_H_ */

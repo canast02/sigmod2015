@@ -45,11 +45,11 @@ using namespace std;
 
 // create thread pool with 4 worker threads
 //ThreadPool pool(THREADS);
-
+static uint32_t relationCount;
 static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 //--------------------------------------------------
-static btree::btree_map<uint64_t, unordered_map<uint32_t, vector<uint64_t*>>> transactionHistory;
+static btree::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
 //--------------------------------------------------
 
@@ -61,9 +61,8 @@ static void processDefineSchema(const DefineSchema& d) {
 	cerr << endl;
 #endif
 	schema = new uint32_t[d.relationCount];
-	memcpy(schema,d.columnCounts,
-			sizeof(uint32_t)* d.relationCount);
-
+	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
+	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
 
 }
@@ -73,7 +72,7 @@ static void processTransaction(const Transaction& t) {
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " "
 	<< t.insertCount << "]" << endl;
 #endif
-	unordered_map<uint32_t, vector<uint64_t*>> operations;
+	vector<uint64_t*>* operations = new vector<uint64_t*>[relationCount];
 	const char* reader = t.operations;
 
 	// Delete all indicated tuples
@@ -82,10 +81,10 @@ static void processTransaction(const Transaction& t) {
 		for (const uint64_t* key = o.keys, *keyLimit = key + o.rowCount;
 				key != keyLimit; ++key) {
 			if (relations[o.relationId].count(*key)) {
-				if (operations.find(o.relationId) == operations.end()) {
-					vector<uint64_t*> v;
-					operations[o.relationId] = move(v);
-				}
+//				if (operations.find(o.relationId) == operations.end()) {
+//					vector<uint64_t*> v;
+//					operations[o.relationId] = move(v);
+//				}
 				operations[o.relationId].emplace_back(
 						move(relations[o.relationId][*key]));
 				relations[o.relationId].erase(*key);
@@ -105,10 +104,10 @@ static void processTransaction(const Transaction& t) {
 			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
 
 			//tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
-			if (operations.find(o.relationId) == operations.end()) {
-				vector<uint64_t*> v;
-				operations[o.relationId] = move(v);
-			}
+//			if (operations.find(o.relationId) == operations.end()) {
+//				vector<uint64_t*> v;
+//				operations[o.relationId] = move(v);
+//			}
 			operations[o.relationId].emplace_back(tuple);
 			relations[o.relationId][values[0]] = tuple;
 		}
@@ -116,12 +115,12 @@ static void processTransaction(const Transaction& t) {
 				+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
 	}
 
-	transactionHistory[t.transactionId] = move(operations);
+	transactionHistory[t.transactionId] = operations;
 }
 //--------------------------------------------------
 
-
 static void processValidationQueries(const ValidationQueries& v) {
+
 #ifdef DEBUG
 	cerr << "validation [" << v.validationId << " " << v.from << " " << v.to
 	<< " " << v.queryCount << "]" << endl;
@@ -258,7 +257,6 @@ static void processValidationQueries(const ValidationQueries& v) {
 	}
 //	if (invalid > 0)
 //		cerr << "invalid:" << invalid << endl;
-
 	queryResults[v.validationId] = conflict;
 }
 //--------------------------------------------------
