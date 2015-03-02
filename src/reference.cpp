@@ -28,147 +28,17 @@
 //
 // For more information, please refer to <http://unlicense.org/>
 //--------------------------------------------------
+#include <ios>
 #include <iostream>
-#include <algorithm>    // std::sort
-#include <vector>
 #include <cassert>
 #include <cstdint>
-#include <unordered_map>
-
 #include "btree/btree_map.h"
-
+#include "Validation.h"
 //#include "ThreadPool.h"
-
-#define OPERATORS 7
-//#define THREADS 4
-//#define DEBUG
 
 //--------------------------------------------------
 using namespace std;
-//--------------------------------------------------
-// Wire protocol messages
-//--------------------------------------------------
-struct MessageHead {
-	/// Message types
-	enum Type
-		: uint32_t {Done,
-		DefineSchema,
-		Transaction,
-		ValidationQueries,
-		Flush,
-		Forget
-	};
-	/// Total message length, excluding this head
-	uint32_t messageLen;
-	/// The message type
-	Type type;
-};
-//--------------------------------------------------
-struct DefineSchema {
-	/// Number of relations
-	uint32_t relationCount;
-	/// Column counts per relation, one count per relation. The first column is always the primary key
-	uint32_t columnCounts[];
-};
-//--------------------------------------------------
-struct Transaction {
-	/// The transaction id. Monotonic increasing
-	uint64_t transactionId;
-	/// The operation counts
-	uint32_t deleteCount, insertCount;
-	/// A sequence of transaction operations. Deletes first, total deleteCount+insertCount operations
-	char operations[];
-};
-//--------------------------------------------------
-struct TransactionOperationDelete {
-	/// The affected relation
-	uint32_t relationId;
-	/// The row count
-	uint32_t rowCount;
-	/// The deleted values, rowCount primary keyss
-	uint64_t keys[];
-};
-//--------------------------------------------------
-struct TransactionOperationInsert {
-	/// The affected relation
-	uint32_t relationId;
-	/// The row count
-	uint32_t rowCount;
-	/// The inserted values, rowCount*relation[relationId].columnCount values
-	uint64_t values[];
-};
-//--------------------------------------------------
-struct ValidationQueries {
-	/// The validation id. Monotonic increasing
-	uint64_t validationId;
-	/// The transaction range
-	uint64_t from, to;
-	/// The query count
-	uint32_t queryCount;
-	/// The queries
-	char queries[];
-};
-//--------------------------------------------------
-struct Query {
-	/// A column description
-	struct Column {
-		/// Support operations
-		enum Op
-			: uint32_t {Equal,
-			NotEqual,
-			Less,
-			LessOrEqual,
-			Greater,
-			GreaterOrEqual,
-			Invalid
-		};
-		/// The column id
-		uint32_t column;
-		/// The operations
-		Op op;
-		/// The constant
-		uint64_t value;
-	};
-	/// The relation
-	uint32_t relationId;
-	/// The number of bound columns
-	uint32_t columnCount;
-	/// The bindings
-	Column columns[];
-};
 
-struct QueryInvalidation {
-	/// A column description
-	Query* query;
-	/// The number of bound columns
-	uint32_t invalidationCount;
-};
-
-bool queryComparator(const Query* q1, const Query* q2) {
-	return (q1->columnCount < q2->columnCount);
-}
-bool columnComparator(Query::Column c1, Query::Column c2) {
-	return (c1.op < c2.op);
-}
-
-bool columnOpComparator(Query::Column c1, Query::Column c2) {
-	return (c1.column < c2.column);
-}
-
-//--------------------------------------------------
-struct Flush {
-	/// All validations to this id (including) must be answered
-	uint64_t validationId;
-};
-//--------------------------------------------------
-struct Forget {
-	/// Transactions older than that (including) will not be tested for
-	uint64_t transactionId;
-};
-#ifdef DEBUG
-int Equal = 0, NotEqual = 0, Less = 0, LessOrEqual = 0, Greater = 0,
-		GreaterOrEqual = 0, Invalid = 0;
-#endif
 //--------------------------------------------------
 // Begin reference implementation
 //--------------------------------------------------
@@ -176,11 +46,10 @@ int Equal = 0, NotEqual = 0, Less = 0, LessOrEqual = 0, Greater = 0,
 // create thread pool with 4 worker threads
 //ThreadPool pool(THREADS);
 
-static vector<uint32_t> schema;
+static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 //--------------------------------------------------
-static btree::btree_map<uint64_t,
-		unordered_map<uint32_t, vector<uint64_t*>> > transactionHistory;
+static btree::btree_map<uint64_t, unordered_map<uint32_t, vector<uint64_t*>>> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
 //--------------------------------------------------
 
@@ -191,9 +60,9 @@ static void processDefineSchema(const DefineSchema& d) {
 	cerr << c << " ";
 	cerr << endl;
 #endif
-	schema.clear();
-	schema.insert(schema.begin(), d.columnCounts,
-			d.columnCounts + d.relationCount);
+	schema = new uint32_t[d.relationCount];
+	memcpy(schema,d.columnCounts,
+			sizeof(uint32_t)* d.relationCount);
 
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
 
@@ -223,7 +92,7 @@ static void processTransaction(const Transaction& t) {
 			}
 		}
 		reader += sizeof(TransactionOperationDelete)
-		+ (sizeof(uint64_t) * o.rowCount);
+				+ (sizeof(uint64_t) * o.rowCount);
 	}
 
 	// Insert new tuples
@@ -232,8 +101,8 @@ static void processTransaction(const Transaction& t) {
 		for (const uint64_t* values = o.values, *valuesLimit = values
 				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
 				values += schema[o.relationId]) {
-			uint64_t* tuple= new uint64_t[schema[o.relationId]];
-			memcpy(tuple, values,schema[o.relationId]*sizeof(uint64_t));
+			uint64_t* tuple = new uint64_t[schema[o.relationId]];
+			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
 
 			//tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
 			if (operations.find(o.relationId) == operations.end()) {
@@ -244,501 +113,13 @@ static void processTransaction(const Transaction& t) {
 			relations[o.relationId][values[0]] = tuple;
 		}
 		reader += sizeof(TransactionOperationInsert)
-		+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
+				+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
 	}
 
 	transactionHistory[t.transactionId] = move(operations);
 }
 //--------------------------------------------------
-static bool isQueryValid(Query* q) {
-	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
-	std::sort(q->columns, q->columns + q->columnCount, columnOpComparator);
 
-	for (unsigned i = 0; i < q->columnCount; i++) {
-		auto curQueryOp = &(q->columns[i]);
-		//for each column check
-		if (opsMap.find(curQueryOp->column) == opsMap.end()) {
-			for (int i = 0; i < OPERATORS; ++i) {
-				opsMap[curQueryOp->column][i] = NULL;
-			}
-			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
-		} else {
-			//Get the column from the columns map
-			Query::Column ** opColumn = opsMap[curQueryOp->column];
-
-			//Fill the operation list
-			if (opColumn[curQueryOp->op] == NULL) {
-				//save
-				opColumn[curQueryOp->op] = curQueryOp;
-			}
-
-			//check the operations of a specific column
-			switch (curQueryOp->op) {
-			case Query::Column::Equal:
-#ifdef DEBUG
-				++Equal;
-#endif
-				//Check c0==<value1> && c0==<value2>, value1!=value2
-				if (opColumn[curQueryOp->op] == NULL) {
-					//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
-				if (opColumn[Query::Column::Equal] != NULL
-						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Equal]->value
-							!= curQueryOp->value) {
-#ifdef DEBUG
-						cerr << "==" << endl;
-#endif
-						return false;
-					}
-				}
-				//Check c0!=<value1> && c0==<value2>, value1==value2
-				if (opColumn[Query::Column::NotEqual] != NULL
-						&& opColumn[Query::Column::NotEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::NotEqual]->value
-							== curQueryOp->value) {
-#ifdef DEBUG
-						cerr << "!=" << endl;
-#endif
-						return false;
-					} else {
-						opColumn[Query::Column::NotEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
-					}
-				}
-				//Check c0<=<value1> && c0==<value2>, value1<value2
-				if (opColumn[Query::Column::LessOrEqual] != NULL
-						&& opColumn[Query::Column::LessOrEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::LessOrEqual]->value
-							< curQueryOp->value) {
-#ifdef DEBUG
-						cerr << "<=" << endl;
-#endif
-						return false;
-					} else {
-						opColumn[Query::Column::LessOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::LessOrEqual] = NULL;
-					}
-				}
-				//Check c0>=<value1> && c0==<value2>, value1==value2
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL
-						&& opColumn[Query::Column::GreaterOrEqual]->op
-								!= Query::Column::Invalid) {
-
-					if (opColumn[Query::Column::GreaterOrEqual]->value
-							> curQueryOp->value) {
-#ifdef DEBUG
-						cerr << ">=" << endl;
-#endif
-						return false;
-					} else {
-						opColumn[Query::Column::GreaterOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
-					}
-				}
-				//Check c0<<value1> && c0==<value2>, value1<=value2
-				if (opColumn[Query::Column::Less] != NULL
-						&& opColumn[Query::Column::Less]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Less]->value
-							<= curQueryOp->value) {
-#ifdef DEBUG
-						cerr << "<" << endl;
-#endif
-						return false;
-					} else {
-						opColumn[Query::Column::Less]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Less] = NULL;
-					}
-				}
-				//Check c0><value1> && c0==<value2>, value1>=value2
-				if (opColumn[Query::Column::Greater] != NULL
-						&& opColumn[Query::Column::Greater]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Greater]->value
-							>= curQueryOp->value) {
-#ifdef DEBUG
-						cerr << ">" << endl;
-#endif
-						return false;
-					} else {
-						opColumn[Query::Column::Greater]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Greater] = NULL;
-					}
-				}
-				break;
-////////////////////////////////////////////////////////////////////////////////////////
-				//Dont do anything
-			case Query::Column::NotEqual:
-#ifdef DEBUG
-				++NotEqual;
-#endif
-				break;
-////////////////////////////////////////////////////////////////////////////////////////
-			case Query::Column::Less:
-#ifdef DEBUG
-				++Less;
-#endif
-				//Check c0==value1> && c0<<value2>, value1>=value2
-				if (opColumn[Query::Column::Equal] != NULL
-						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Equal]->value
-							>= curQueryOp->value) {
-						return false;
-					}
-
-				}
-				//Check c0><value1> && c0<<value2>, value1>=value2
-				if (opColumn[Query::Column::Greater] != NULL
-						&& opColumn[Query::Column::Greater]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Greater]->value
-							>= curQueryOp->value) {
-						return false;
-					}
-				}
-				//Check c0>=<value1> && c0<<value2>, value1>=value2
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL
-						&& opColumn[Query::Column::GreaterOrEqual]->op
-								!= Query::Column::Invalid) {
-
-					if (opColumn[Query::Column::GreaterOrEqual]->value
-							>= curQueryOp->value) {
-						return false;
-					}
-				}
-
-				//Check c0!=<value1> && c0<<value2>, value1<=value2
-				if (opColumn[Query::Column::NotEqual] != NULL
-						&& opColumn[Query::Column::NotEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::NotEqual]->value
-							> curQueryOp->value) {
-						//TODO: remove != from queries
-						opColumn[Query::Column::NotEqual]->op =
-								Query::Column::Invalid;
-
-					}
-				}
-
-				//Check c0<=<value1> && c0<<value2>
-				if (opColumn[Query::Column::LessOrEqual] != NULL
-						&& opColumn[Query::Column::LessOrEqual]->op
-								!= Query::Column::Invalid) {
-					//TODO: keep the smallest one from queries
-					if (opColumn[Query::Column::LessOrEqual]->value
-							>= curQueryOp->value) {
-						opColumn[Query::Column::LessOrEqual]->op =
-								Query::Column::Invalid;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-				}
-
-				//Check c0<<value1> && c0<<value2>
-				if (opColumn[Query::Column::Less] != NULL
-						&& opColumn[Query::Column::Less]->op
-								!= Query::Column::Invalid
-						&& opColumn[Query::Column::Less] != curQueryOp) {
-					//TODO: Keep the smallest
-					if (curQueryOp->value
-							<= opColumn[Query::Column::Less]->value) {
-						opColumn[Query::Column::Less]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Less] = curQueryOp;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-				}
-
-				break;
-//////////////////////////////////////////////////////////////////////////////////////////
-			case Query::Column::LessOrEqual:
-#ifdef DEBUG
-				++LessOrEqual;
-#endif
-				//Check c0==value1> && c0<=<value2>, value1>=value2
-				if (opColumn[Query::Column::Equal] != NULL
-						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Equal]->value
-							> curQueryOp->value) {
-						return false;
-					}
-
-				}
-
-				//Check c0>=<value1> && c0<=<value2>, value1>value2
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL
-						&& opColumn[Query::Column::GreaterOrEqual]->op
-								!= Query::Column::Invalid) {
-
-					if (opColumn[Query::Column::GreaterOrEqual]->value
-							> curQueryOp->value) {
-						return false;
-					}
-					//TODO: if(value1 == value2) replace with equal
-					else if (opColumn[Query::Column::GreaterOrEqual]->value
-							== curQueryOp->value) {
-						opColumn[Query::Column::GreaterOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
-						curQueryOp->op = Query::Column::Equal;
-					}
-				}
-
-				//Check c0><value1> && c0<=<value2>, value1>=value2
-				if (opColumn[Query::Column::Greater] != NULL
-						&& opColumn[Query::Column::Greater]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Greater]->value
-							> curQueryOp->value) {
-						return false;
-					}
-				}
-
-				//Check c0!=<value1> && c0<=<value2> value1<=value2
-				if (opColumn[Query::Column::NotEqual] != NULL
-						&& opColumn[Query::Column::NotEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::NotEqual]->value
-							> curQueryOp->value) {
-						//TODO: remove != from queries
-						opColumn[Query::Column::NotEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
-
-					}
-				}
-
-				//Check c0<=<value1> && c0<=<value2>
-				if (opColumn[Query::Column::LessOrEqual] != NULL
-						&& opColumn[Query::Column::LessOrEqual]->op
-								!= Query::Column::Invalid
-						&& opColumn[Query::Column::LessOrEqual] != curQueryOp) {
-					//TODO: keep the smallest one from queries
-					if (opColumn[Query::Column::LessOrEqual]->value
-							>= curQueryOp->value) {
-						opColumn[Query::Column::LessOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::LessOrEqual] = curQueryOp;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-				}
-
-				//Check c0<<value1> && c0<=<value2>
-				if (opColumn[Query::Column::Less] != NULL
-						&& opColumn[Query::Column::Less]->op
-								!= Query::Column::Invalid) {
-					//TODO: Keep the smallest
-					if (opColumn[Query::Column::Less]->value
-							> curQueryOp->value) {
-						opColumn[Query::Column::Less]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Less] = NULL;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-				}
-
-				break;
-//				////////////////////////////////////////////////////////////////////////////////////////
-			case Query::Column::Greater:
-#ifdef DEBUG
-				++Greater;
-#endif
-				//Check c0==value1> && c0><value2>, value1>=value2
-				if (opColumn[Query::Column::Equal] != NULL
-						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Equal]->value
-							<= curQueryOp->value) {
-						return false;
-					}
-
-				}
-
-				//Check c0<=<value1> && c0><value2>
-				if (opColumn[Query::Column::LessOrEqual] != NULL
-						&& opColumn[Query::Column::LessOrEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::LessOrEqual]->value
-							<= curQueryOp->value) {
-						return false;
-					}
-				}
-
-				//Check c0<<value1> && c0><value2>
-				if (opColumn[Query::Column::Less] != NULL
-						&& opColumn[Query::Column::Less]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Less]->value
-							<= curQueryOp->value) {
-						return false;
-					}
-				}
-				//Check c0!=<value1> && c0><value2>, value1<=value2
-				if (opColumn[Query::Column::NotEqual] != NULL
-						&& opColumn[Query::Column::NotEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::NotEqual]->value
-							<= curQueryOp->value) {
-						//TODO: remove != from queries
-						opColumn[Query::Column::NotEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
-
-					}
-				}
-
-				//Check c0>=<value1> && c0><value2>
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL
-						&& opColumn[Query::Column::GreaterOrEqual]->op
-								!= Query::Column::Invalid) {
-					//TODO: Keep the max
-					if (opColumn[Query::Column::GreaterOrEqual]->value
-							> curQueryOp->value) {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					} else {
-						opColumn[Query::Column::GreaterOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
-					}
-				}
-
-				//Check c0><value1> && c0><value2>
-				if (opColumn[Query::Column::Greater] != NULL
-						&& opColumn[Query::Column::Greater]->op
-								!= Query::Column::Invalid
-						&& opColumn[Query::Column::Greater] != curQueryOp) {
-					//TODO: Keep the max
-					if (opColumn[Query::Column::Greater]->value
-							< curQueryOp->value) {
-						opColumn[Query::Column::Greater]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Greater] = curQueryOp;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-
-					}
-				}
-
-				break;
-//				////////////////////////////////////////////////////////////////////////////////////////
-			case Query::Column::GreaterOrEqual:
-#ifdef DEBUG
-				++GreaterOrEqual;
-#endif
-				//Check c0==value1> && c0>=<value2>, value1>value2
-				if (opColumn[Query::Column::Equal] != NULL
-						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Equal]->value
-							< curQueryOp->value) {
-						return false;
-					}
-
-				}
-				//Check c0<=<value1> && c0><value2>
-				if (opColumn[Query::Column::LessOrEqual] != NULL
-						&& opColumn[Query::Column::LessOrEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::LessOrEqual]->value
-							< curQueryOp->value) {
-						return false;
-					} else {
-						//TODO: values the same replace them with (==)
-					}
-				}
-
-				//Check c0<<value1> && c0><value2>
-				if (opColumn[Query::Column::Less] != NULL
-						&& opColumn[Query::Column::Less]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::Less]->value
-							<= curQueryOp->value) {
-						return false;
-					}
-				}
-
-				//Check c0!=<value1> && c0>=<value2>, value1<value2
-				if (opColumn[Query::Column::NotEqual] != NULL
-						&& opColumn[Query::Column::NotEqual]->op
-								!= Query::Column::Invalid) {
-					if (opColumn[Query::Column::NotEqual]->value
-							< curQueryOp->value) {
-						//TODO: remove != from queries and (<=) -> (<)
-						opColumn[Query::Column::NotEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
-
-					}
-				}
-
-				//Check c0>=<value1> && c0><value2>
-				if (opColumn[Query::Column::GreaterOrEqual] != NULL
-						&& opColumn[Query::Column::GreaterOrEqual]->op
-								!= Query::Column::Invalid
-						&& opColumn[Query::Column::GreaterOrEqual]
-								!= curQueryOp) {
-					//TODO: Keep the max
-					if (opColumn[Query::Column::GreaterOrEqual]->value
-							< curQueryOp->value) {
-						opColumn[Query::Column::GreaterOrEqual]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = curQueryOp;
-
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-
-				}
-
-				//Check c0><value1> && c0><value2>
-				if (opColumn[Query::Column::Greater] != NULL
-						&& opColumn[Query::Column::Greater]->op
-								!= Query::Column::Invalid) {
-//					//TODO: Keep the max
-					if (opColumn[Query::Column::Greater]->value
-							< curQueryOp->value) {
-						opColumn[Query::Column::Greater]->op =
-								Query::Column::Invalid;
-						opColumn[Query::Column::Greater] = NULL;
-					} else {
-						curQueryOp->op = Query::Column::Invalid;
-						break;
-					}
-				}
-
-				break;
-
-			case Query::Column::Invalid:
-				continue;
-			}
-
-		}
-	}
-	return true;
-
-}
 
 static void processValidationQueries(const ValidationQueries& v) {
 #ifdef DEBUG
@@ -913,6 +294,7 @@ template<typename Type> static const Type& readBody(istream& in,
 //--------------------------------------------------
 int main() {
 	vector<char> message;
+	std::ios_base::sync_with_stdio(false);
 	while (true) {
 // Retrieve the message
 		MessageHead head;
