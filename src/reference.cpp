@@ -36,7 +36,6 @@
 #include <unordered_map>
 
 #include "btree/btree_map.h"
-#include "heap/heapsort.h"
 
 //#include "ThreadPool.h"
 
@@ -178,10 +177,10 @@ int Equal = 0, NotEqual = 0, Less = 0, LessOrEqual = 0, Greater = 0,
 //ThreadPool pool(THREADS);
 
 static vector<uint32_t> schema;
-static unordered_map<uint32_t, vector<uint64_t>> *relations;
+static unordered_map<uint32_t, uint64_t*> *relations;
 //--------------------------------------------------
 static btree::btree_map<uint64_t,
-		unordered_map<uint32_t, vector<vector<uint64_t>>> > transactionHistory;
+		unordered_map<uint32_t, vector<uint64_t*>> > transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
 //--------------------------------------------------
 
@@ -196,7 +195,7 @@ static void processDefineSchema(const DefineSchema& d) {
 	schema.insert(schema.begin(), d.columnCounts,
 			d.columnCounts + d.relationCount);
 
-	relations = new unordered_map<uint32_t, vector<uint64_t>> [d.relationCount];
+	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
 
 }
 //--------------------------------------------------
@@ -205,8 +204,7 @@ static void processTransaction(const Transaction& t) {
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " "
 	<< t.insertCount << "]" << endl;
 #endif
-	unordered_map<uint32_t, vector<vector<uint64_t>>> operations;
-	operations.reserve(t.deleteCount + t.insertCount);
+	unordered_map<uint32_t, vector<uint64_t*>> operations;
 	const char* reader = t.operations;
 
 	// Delete all indicated tuples
@@ -216,7 +214,7 @@ static void processTransaction(const Transaction& t) {
 				key != keyLimit; ++key) {
 			if (relations[o.relationId].count(*key)) {
 				if (operations.find(o.relationId) == operations.end()) {
-					vector<vector<uint64_t>> v;
+					vector<uint64_t*> v;
 					operations[o.relationId] = move(v);
 				}
 				operations[o.relationId].emplace_back(
@@ -234,15 +232,16 @@ static void processTransaction(const Transaction& t) {
 		for (const uint64_t* values = o.values, *valuesLimit = values
 				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
 				values += schema[o.relationId]) {
-			vector<uint64_t> tuple;
-			tuple.reserve(schema[o.relationId]);
-			tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
+			uint64_t* tuple= new uint64_t[schema[o.relationId]];
+			memcpy(tuple, values,schema[o.relationId]*sizeof(uint64_t));
+
+			//tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
 			if (operations.find(o.relationId) == operations.end()) {
-				vector<vector<uint64_t>> v;
+				vector<uint64_t*> v;
 				operations[o.relationId] = move(v);
 			}
 			operations[o.relationId].emplace_back(tuple);
-			relations[o.relationId][values[0]] = move(tuple);
+			relations[o.relationId][values[0]] = tuple;
 		}
 		reader += sizeof(TransactionOperationInsert)
 		+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
@@ -253,11 +252,8 @@ static void processTransaction(const Transaction& t) {
 //--------------------------------------------------
 static bool isQueryValid(Query* q) {
 	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
-#ifdef SORT
-	bottom_up_heapsort(q->columns, q->columnCount, columnOpComparator);
-#else
 	std::sort(q->columns, q->columns + q->columnCount, columnOpComparator);
-#endif
+
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 		//for each column check
@@ -759,8 +755,8 @@ static void processValidationQueries(const ValidationQueries& v) {
 	//Sort the query based on the validation's query count
 	///////////////////////////////////////////////////////////////////////
 	Query* queries[v.queryCount];
-	int pruned = 0;
-	int invalid = 0;
+//	int pruned = 0;
+//	int invalid = 0;
 	unsigned pos = 0;
 	for (unsigned index = 0; index != v.queryCount; ++index) {
 		auto q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
@@ -776,22 +772,15 @@ static void processValidationQueries(const ValidationQueries& v) {
 	}
 
 	//cerr << pruned << "|" << v.queryCount << endl;
-#ifdef SORT
-	bottom_up_heapsort(queries, pos, queryComparator);
-#else
 	std::sort(queries, queries + pos, queryComparator);
-#endif
 
 	///////////////////////////////////////////////////////////////////////
 
-	//Itarates through all sorted queries
+	//Iterates through all sorted queries
 	for (unsigned index = 0; index != pos; ++index) {
 		auto q = queries[index];
-#ifdef SORT
-		bottom_up_heapsort(q->columns, q->columnCount, columnComparator);
-#else
 		std::sort(q->columns, q->columns + q->columnCount, columnComparator);
-#endif
+
 #ifdef DEBUG
 		cerr << "q" << qId << "[ ";
 		qId++;
@@ -836,6 +825,7 @@ static void processValidationQueries(const ValidationQueries& v) {
 
 				bool match = true;
 				auto c = q->columns;
+
 				auto cLimit = c + q->columnCount;
 				for (; c != cLimit; ++c) {
 					uint64_t tupleValue = tuple[c->column];
@@ -864,7 +854,6 @@ static void processValidationQueries(const ValidationQueries& v) {
 //						++invalid;
 						queryResults[v.validationId] = true;
 						return;
-
 					}
 					if (!result) {
 						match = false;
