@@ -81,10 +81,6 @@ static void processTransaction(const Transaction& t) {
 		for (const uint64_t* key = o.keys, *keyLimit = key + o.rowCount;
 				key != keyLimit; ++key) {
 			if (relations[o.relationId].count(*key)) {
-//				if (operations.find(o.relationId) == operations.end()) {
-//					vector<uint64_t*> v;
-//					operations[o.relationId] = move(v);
-//				}
 				operations[o.relationId].emplace_back(
 						move(relations[o.relationId][*key]));
 				relations[o.relationId].erase(*key);
@@ -102,12 +98,6 @@ static void processTransaction(const Transaction& t) {
 				values += schema[o.relationId]) {
 			uint64_t* tuple = new uint64_t[schema[o.relationId]];
 			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
-
-			//tuple.insert(tuple.begin(), values, values + schema[o.relationId]);
-//			if (operations.find(o.relationId) == operations.end()) {
-//				vector<uint64_t*> v;
-//				operations[o.relationId] = move(v);
-//			}
 			operations[o.relationId].emplace_back(tuple);
 			relations[o.relationId][values[0]] = tuple;
 		}

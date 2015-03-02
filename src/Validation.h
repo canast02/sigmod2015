@@ -31,7 +31,7 @@ inline static bool isQueryValid(Query* q) {
 			Query::Column ** opColumn = opsMap[curQueryOp->column];
 
 			//Fill the operation list
-			if (opColumn[curQueryOp->op] == NULL) {
+			if (opColumn[curQueryOp->op] == NULL || opColumn[curQueryOp->op]->op==Query::Column::Invalid) {
 				//save
 				opColumn[curQueryOp->op] = curQueryOp;
 			}
@@ -159,6 +159,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							>= curQueryOp->value) {
 						return false;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+						break;
 					}
 
 				}
@@ -240,6 +243,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							> curQueryOp->value) {
 						return false;
+					} else {
+						curQueryOp->op = Query::Column::Invalid;
+						break;
 					}
 
 				}
@@ -333,6 +339,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							<= curQueryOp->value) {
 						return false;
+					}else{
+						curQueryOp->op = Query::Column::Invalid;
+												break;
 					}
 
 				}
@@ -417,6 +426,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							< curQueryOp->value) {
 						return false;
+					}else{
+						curQueryOp->op = Query::Column::Invalid;
+												break;
 					}
 
 				}
@@ -427,8 +439,12 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::LessOrEqual]->value
 							< curQueryOp->value) {
 						return false;
-					} else {
+					} else if (opColumn[Query::Column::LessOrEqual]->value
+							== curQueryOp->value) {
 						//TODO: values the same replace them with (==)
+						opColumn[Query::Column::LessOrEqual]->op=Query::Column::Invalid;
+						curQueryOp->op = Query::Column::Equal;
+
 					}
 				}
 
