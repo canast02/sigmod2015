@@ -8,7 +8,7 @@
 #ifndef STRUCTURES_H_
 #define STRUCTURES_H_
 
-#define OPERATORS 7
+#define OPERATORS 6
 //#define THREADS 4
 //#define DEBUG
 

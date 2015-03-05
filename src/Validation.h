@@ -11,28 +11,40 @@
 #include <unordered_map>
 #include <algorithm>    // std::sort
 #include <vector>
+#include <array>
 
 #include "Structures.h"
+#include "sparsehash/dense_hash_map.h"
+using namespace std;
 
 inline static bool isQueryValid(Query* q) {
-
-	std::unordered_map<uint32_t, Query::Column *[OPERATORS]> opsMap;
-	//std::sort(q->columns, q->columns + q->columnCount, columnOpComparator);
+	/**
+	 * To value-initialize an object of type T means:
+	 * — if T is a (possibly cv-qualified) class type without a user-provided or deleted default constructor,
+	 * then the object is zero-initialized …, and if T has a non-trivial default constructor,
+	 * the object is default-initialized;
+	 */
+	unordered_map<uint32_t, std::array<Query::Column*, OPERATORS>> opsMap;
+	/**
+	 * IMPORTANT:
+	 * dense_hash_map requires you call set_empty_key() immediately after constructing the hash-map,
+	 * and before calling any other dense_hash_map method.
+	 */
+//	opsMap.set_empty_key(0);
 
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 		//for each column check
 		if (opsMap.find(curQueryOp->column) == opsMap.end()) {
-			for (int i = 0; i < OPERATORS; ++i) {
-				opsMap[curQueryOp->column][i] = NULL;
-			}
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
 		} else {
 			//Get the column from the columns map
-			Query::Column ** opColumn = opsMap[curQueryOp->column];
+			std::array<Query::Column*, OPERATORS> opColumn =
+					opsMap[curQueryOp->column];
 
 			//Fill the operation list
-			if (opColumn[curQueryOp->op] == NULL || opColumn[curQueryOp->op]->op==Query::Column::Invalid) {
+			if (opColumn[curQueryOp->op] == NULL
+					|| opColumn[curQueryOp->op]->op == Query::Column::Invalid) {
 				//save
 				opColumn[curQueryOp->op] = curQueryOp;
 			}
@@ -340,9 +352,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							<= curQueryOp->value) {
 						return false;
-					}else{
+					} else {
 						curQueryOp->op = Query::Column::Invalid;
-												break;
+						break;
 					}
 
 				}
@@ -427,9 +439,9 @@ inline static bool isQueryValid(Query* q) {
 					if (opColumn[Query::Column::Equal]->value
 							< curQueryOp->value) {
 						return false;
-					}else{
+					} else {
 						curQueryOp->op = Query::Column::Invalid;
-												break;
+						break;
 					}
 
 				}
@@ -443,7 +455,8 @@ inline static bool isQueryValid(Query* q) {
 					} else if (opColumn[Query::Column::LessOrEqual]->value
 							== curQueryOp->value) {
 						//TODO: values the same replace them with (==)
-						opColumn[Query::Column::LessOrEqual]->op=Query::Column::Invalid;
+						opColumn[Query::Column::LessOrEqual]->op =
+								Query::Column::Invalid;
 						curQueryOp->op = Query::Column::Equal;
 
 					}

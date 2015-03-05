@@ -127,7 +127,7 @@ static void processValidationQueries(const ValidationQueries& v) {
 	Query* queries[v.queryCount];
 //	int pruned = 0;
 //	int invalid = 0;
-	unsigned pos = 0;
+	uint32_t pos = 0;
 	for (unsigned index = 0; index != v.queryCount; ++index) {
 		auto q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
 		if (isQueryValid(q)) {
