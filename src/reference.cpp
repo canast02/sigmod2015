@@ -254,8 +254,17 @@ static void processFlush(const Flush& f) {
 #ifdef DEBUG
 	cerr << "flush [" << f.validationId << "]" << endl;
 #endif
-	while ((!queryResults.empty())
-			&& ((*queryResults.begin()).first <= f.validationId)) {
+//	auto start = queryResults.begin();
+//	auto stop  = queryResults.find(f.validationId);
+//
+//	for(auto s=start; s!=stop; ++s) {
+//		char c = '0' + s->second;
+//		cout.write(&c, 1);
+//		queryResults.erase(s);
+//	}
+//	cout.flush();
+
+	while ((!queryResults.empty()) && ((*queryResults.begin()).first <= f.validationId)) {
 		char c = '0' + (*queryResults.begin()).second;
 		cout.write(&c, 1);
 		queryResults.erase(queryResults.begin());
@@ -267,9 +276,10 @@ static void processForget(const Forget& f) {
 #ifdef DEBUG
 	cerr << "forget [" << f.transactionId << "]" << endl;
 #endif
-	while ((!transactionHistory.empty())
-			&& ((*transactionHistory.begin()).first <= f.transactionId))
-		transactionHistory.erase(transactionHistory.begin());
+	transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
+//	while ((!transactionHistory.empty())
+//			&& ((*transactionHistory.begin()).first <= f.transactionId))
+//		transactionHistory.erase(transactionHistory.begin());
 }
 //--------------------------------------------------
 // Read the message body and cast it to the desired type
