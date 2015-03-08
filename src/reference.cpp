@@ -35,7 +35,28 @@
 #include "btree/btree_map.h"
 #include "Validation.h"
 //#include "ThreadPool.h"
+#include <mmintrin.h>	   // MMX
+#include <xmmintrin.h>	  // SSE1
+#include <emmintrin.h>	  // SSE2
 
+#if (MATH_LEVEL & MATH_LEVEL_SSE3)
+#include <pmmintrin.h>	  // Intel SSE3
+#endif
+#if (MATH_LEVEL & MATH_LEVEL_SSSE3)
+#include <tmmintrin.h>	  // Intel SSSE3 (the extra S is not a typo)
+#endif
+#if (MATH_LEVEL & MATH_LEVEL_SSE4_1)
+#include <smmintrin.h>	  // Intel SSE4.1
+#endif
+#if (MATH_LEVEL & MATH_LEVEL_SSE4_2)
+#include <nmmintrin.h>	  // Intel SSE4.2
+#endif
+#if (MATH_LEVEL & MATH_LEVEL_AES)
+#include <wmmintrin.h>	  // Intel AES instructions
+#endif
+#if (MATH_LEVEL & (MATH_LEVEL_AVX_128|MATH_LEVEL_AVX_256))
+#include <immintrin.h>	  // Intel AVX instructions
+#endif
 //--------------------------------------------------
 using namespace std;
 
@@ -283,6 +304,7 @@ template<typename Type> static const Type& readBody(istream& in,
 int main() {
 	vector<char> message;
 	std::ios_base::sync_with_stdio(false);
+
 	while (true) {
 // Retrieve the message
 		MessageHead head;
