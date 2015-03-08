@@ -101,10 +101,10 @@ static void processTransaction(const Transaction& t) {
 		auto& o = *reinterpret_cast<const TransactionOperationDelete*>(reader);
 		for (const uint64_t* key = o.keys, *keyLimit = key + o.rowCount;
 				key != keyLimit; ++key) {
-			if (relations[o.relationId].count(*key)) {
-				operations[o.relationId].emplace_back(
-						move(relations[o.relationId][*key]));
-				relations[o.relationId].erase(*key);
+			auto rel = relations[o.relationId].find(*key);
+			if (rel != relations[o.relationId].end()) {
+				operations[o.relationId].emplace_back(move(rel->second));
+				relations[o.relationId].erase(rel);
 			}
 		}
 		reader += sizeof(TransactionOperationDelete)
@@ -114,8 +114,8 @@ static void processTransaction(const Transaction& t) {
 	// Insert new tuples
 	for (uint32_t index = 0; index != t.insertCount; ++index) {
 		auto& o = *reinterpret_cast<const TransactionOperationInsert*>(reader);
-		for (const uint64_t* values = o.values, *valuesLimit = values
-				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
+		for (const uint64_t* values = o.values, *valuesLimit = values + (o.rowCount * schema[o.relationId]);
+				values != valuesLimit;
 				values += schema[o.relationId]) {
 			uint64_t* tuple = new uint64_t[schema[o.relationId]];
 			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
@@ -275,8 +275,17 @@ static void processFlush(const Flush& f) {
 #ifdef DEBUG
 	cerr << "flush [" << f.validationId << "]" << endl;
 #endif
-	while ((!queryResults.empty())
-			&& ((*queryResults.begin()).first <= f.validationId)) {
+//	auto start = queryResults.begin();
+//	auto stop  = queryResults.find(f.validationId);
+//
+//	for(auto s=start; s!=stop; ++s) {
+//		char c = '0' + s->second;
+//		cout.write(&c, 1);
+//		queryResults.erase(s);
+//	}
+//	cout.flush();
+
+	while ((!queryResults.empty()) && ((*queryResults.begin()).first <= f.validationId)) {
 		char c = '0' + (*queryResults.begin()).second;
 		cout.write(&c, 1);
 		queryResults.erase(queryResults.begin());
@@ -288,9 +297,10 @@ static void processForget(const Forget& f) {
 #ifdef DEBUG
 	cerr << "forget [" << f.transactionId << "]" << endl;
 #endif
-	while ((!transactionHistory.empty())
-			&& ((*transactionHistory.begin()).first <= f.transactionId))
-		transactionHistory.erase(transactionHistory.begin());
+	transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
+//	while ((!transactionHistory.empty())
+//			&& ((*transactionHistory.begin()).first <= f.transactionId))
+//		transactionHistory.erase(transactionHistory.begin());
 }
 //--------------------------------------------------
 // Read the message body and cast it to the desired type

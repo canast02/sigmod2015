@@ -35,12 +35,12 @@ inline static bool isQueryValid(Query* q) {
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 		//for each column check
-		if (opsMap.find(curQueryOp->column) == opsMap.end()) {
+		auto t = opsMap.find(curQueryOp->column);
+		if (t == opsMap.end()) {
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
 		} else {
 			//Get the column from the columns map
-			std::array<Query::Column*, OPERATORS> opColumn =
-					opsMap[curQueryOp->column];
+			std::array<Query::Column*, OPERATORS> opColumn = t->second;
 
 			//Fill the operation list
 			if (opColumn[curQueryOp->op] == NULL
