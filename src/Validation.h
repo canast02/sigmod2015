@@ -25,6 +25,7 @@ inline static bool isQueryValid(Query* q) {
 	 * the object is default-initialized;
 	 */
 	unordered_map<uint32_t, std::array<Query::Column*, OPERATORS>> opsMap;
+	//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
 	/**
 	 * IMPORTANT:
 	 * dense_hash_map requires you call set_empty_key() immediately after constructing the hash-map,
@@ -56,19 +57,19 @@ inline static bool isQueryValid(Query* q) {
 				++Equal;
 #endif
 				//Check c0==<value1> && c0==<value2>, value1!=value2
-				if (opColumn[curQueryOp->op] == NULL) {
-					//save
-					opColumn[curQueryOp->op] = curQueryOp;
-				}
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid) {
+								!= Query::Column::Invalid && opColumn[Query::Column::Equal] != curQueryOp) {
 					if (opColumn[Query::Column::Equal]->value
 							!= curQueryOp->value) {
 #ifdef DEBUG
 						cerr << "==" << endl;
 #endif
 						return false;
+					}
+					else{
+						curQueryOp->op = Query::Column::Invalid;
+						break;
 					}
 				}
 				//Check c0!=<value1> && c0==<value2>, value1==value2

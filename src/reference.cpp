@@ -297,10 +297,10 @@ static void processForget(const Forget& f) {
 #ifdef DEBUG
 	cerr << "forget [" << f.transactionId << "]" << endl;
 #endif
-	transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
-//	while ((!transactionHistory.empty())
-//			&& ((*transactionHistory.begin()).first <= f.transactionId))
-//		transactionHistory.erase(transactionHistory.begin());
+	//transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
+	while ((!transactionHistory.empty())
+			&& ((*transactionHistory.begin()).first <= f.transactionId))
+		transactionHistory.erase(transactionHistory.begin());
 }
 //--------------------------------------------------
 // Read the message body and cast it to the desired type
