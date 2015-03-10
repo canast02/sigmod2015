@@ -33,7 +33,14 @@
 #include <cassert>
 #include <cstdint>
 #include "btree/btree_map.h"
+#include "stx/btree_map.h"
+
 #include "Validation.h"
+
+#ifdef CPU
+#include <sched.h>
+#endif
+
 //#include "ThreadPool.h"
 #include <mmintrin.h>	   // MMX
 #include <xmmintrin.h>	  // SSE1
@@ -70,7 +77,7 @@ static uint32_t relationCount;
 static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 //--------------------------------------------------
-static btree::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
+static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
 //--------------------------------------------------
 
@@ -163,14 +170,14 @@ static void processValidationQueries(const ValidationQueries& v) {
 	}
 
 	//cerr << pruned << "|" << v.queryCount << endl;
-	std::sort(queries, queries + pos, queryComparator);
+//	std::sort(queries, queries + pos, queryComparator);
 
 	///////////////////////////////////////////////////////////////////////
 
 	//Iterates through all sorted queries
 	for (unsigned index = 0; index != pos; ++index) {
 		auto q = queries[index];
-		std::sort(q->columns, q->columns + q->columnCount, columnComparator);
+		//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
 
 #ifdef DEBUG
 		cerr << "q" << qId << "[ ";
@@ -243,8 +250,9 @@ static void processValidationQueries(const ValidationQueries& v) {
 						break;
 					case Query::Column::Invalid:
 //						++invalid;
-						queryResults[v.validationId] = true;
-						return;
+						continue;
+//						queryResults[v.validationId] = true;
+//						return;
 					}
 					if (!result) {
 						match = false;
@@ -312,6 +320,12 @@ template<typename Type> static const Type& readBody(istream& in,
 }
 //--------------------------------------------------
 int main() {
+#ifdef CPU
+	cpu_set_t  mask;
+	CPU_ZERO(&mask);
+	CPU_SET(0, &mask);
+	int result = sched_setaffinity(0, sizeof(mask), &mask);
+#endif
 	vector<char> message;
 	std::ios_base::sync_with_stdio(false);
 

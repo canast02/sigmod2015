@@ -11,7 +11,7 @@
 #define OPERATORS 6
 //#define THREADS 4
 //#define DEBUG
-
+//#define CPU
 //--------------------------------------------------
 // Wire protocol messages
 //--------------------------------------------------

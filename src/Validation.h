@@ -24,15 +24,14 @@ inline static bool isQueryValid(Query* q) {
 	 * then the object is zero-initialized …, and if T has a non-trivial default constructor,
 	 * the object is default-initialized;
 	 */
-	unordered_map<uint32_t, std::array<Query::Column*, OPERATORS>> opsMap;
+	stx::btree_map<uint32_t, std::array<Query::Column*, OPERATORS>> opsMap;
 	//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
 	/**
 	 * IMPORTANT:
 	 * dense_hash_map requires you call set_empty_key() immediately after constructing the hash-map,
 	 * and before calling any other dense_hash_map method.
 	 */
-//	opsMap.set_empty_key(0);
-
+	//opsMap.set_empty_key(0);
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 		//for each column check
@@ -59,15 +58,15 @@ inline static bool isQueryValid(Query* q) {
 				//Check c0==<value1> && c0==<value2>, value1!=value2
 				if (opColumn[Query::Column::Equal] != NULL
 						&& opColumn[Query::Column::Equal]->op
-								!= Query::Column::Invalid && opColumn[Query::Column::Equal] != curQueryOp) {
+								!= Query::Column::Invalid
+						&& opColumn[Query::Column::Equal] != curQueryOp) {
 					if (opColumn[Query::Column::Equal]->value
 							!= curQueryOp->value) {
 #ifdef DEBUG
 						cerr << "==" << endl;
 #endif
 						return false;
-					}
-					else{
+					} else {
 						curQueryOp->op = Query::Column::Invalid;
 						break;
 					}
@@ -85,7 +84,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::NotEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
+//						opColumn[Query::Column::NotEqual] = NULL;
 					}
 				}
 				//Check c0<=<value1> && c0==<value2>, value1<value2
@@ -101,7 +100,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::LessOrEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::LessOrEqual] = NULL;
+//						opColumn[Query::Column::LessOrEqual] = NULL;
 					}
 				}
 				//Check c0>=<value1> && c0==<value2>, value1==value2
@@ -118,7 +117,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::GreaterOrEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
+//						opColumn[Query::Column::GreaterOrEqual] = NULL;
 					}
 				}
 				//Check c0<<value1> && c0==<value2>, value1<=value2
@@ -134,7 +133,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::Less]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::Less] = NULL;
+//						opColumn[Query::Column::Less] = NULL;
 					}
 				}
 				//Check c0><value1> && c0==<value2>, value1>=value2
@@ -150,7 +149,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::Greater]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::Greater] = NULL;
+//						opColumn[Query::Column::Greater] = NULL;
 					}
 				}
 				break;
@@ -278,7 +277,7 @@ inline static bool isQueryValid(Query* q) {
 							== curQueryOp->value) {
 						opColumn[Query::Column::GreaterOrEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
+//						opColumn[Query::Column::GreaterOrEqual] = NULL;
 						curQueryOp->op = Query::Column::Equal;
 					}
 				}
@@ -302,7 +301,7 @@ inline static bool isQueryValid(Query* q) {
 						//TODO: remove != from queries
 						opColumn[Query::Column::NotEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
+//						opColumn[Query::Column::NotEqual] = NULL;
 
 					}
 				}
@@ -333,7 +332,7 @@ inline static bool isQueryValid(Query* q) {
 							> curQueryOp->value) {
 						opColumn[Query::Column::Less]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::Less] = NULL;
+//						opColumn[Query::Column::Less] = NULL;
 					} else {
 						curQueryOp->op = Query::Column::Invalid;
 						break;
@@ -388,7 +387,7 @@ inline static bool isQueryValid(Query* q) {
 						//TODO: remove != from queries
 						opColumn[Query::Column::NotEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
+//						opColumn[Query::Column::NotEqual] = NULL;
 
 					}
 				}
@@ -405,7 +404,7 @@ inline static bool isQueryValid(Query* q) {
 					} else {
 						opColumn[Query::Column::GreaterOrEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::GreaterOrEqual] = NULL;
+//						opColumn[Query::Column::GreaterOrEqual] = NULL;
 					}
 				}
 
@@ -482,7 +481,7 @@ inline static bool isQueryValid(Query* q) {
 						//TODO: remove != from queries and (<=) -> (<)
 						opColumn[Query::Column::NotEqual]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::NotEqual] = NULL;
+//						opColumn[Query::Column::NotEqual] = NULL;
 
 					}
 				}
@@ -516,7 +515,7 @@ inline static bool isQueryValid(Query* q) {
 							< curQueryOp->value) {
 						opColumn[Query::Column::Greater]->op =
 								Query::Column::Invalid;
-						opColumn[Query::Column::Greater] = NULL;
+//						opColumn[Query::Column::Greater] = NULL;
 					} else {
 						curQueryOp->op = Query::Column::Invalid;
 						break;
