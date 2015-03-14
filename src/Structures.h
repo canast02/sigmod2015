@@ -8,10 +8,13 @@
 #ifndef STRUCTURES_H_
 #define STRUCTURES_H_
 
+#define MIN 0
+#define MAX 1
+#define MINMAX 2
 #define OPERATORS 6
 //#define THREADS 4
 //#define DEBUG
-//#define CPU
+#define CPU
 //--------------------------------------------------
 // Wire protocol messages
 //--------------------------------------------------

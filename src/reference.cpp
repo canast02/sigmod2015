@@ -75,7 +75,13 @@ using namespace std;
 //ThreadPool pool(THREADS);
 static uint32_t relationCount;
 static uint32_t* schema;
+
+//unordered_map best performance
 static unordered_map<uint32_t, uint64_t*> *relations;
+
+//GLOBAL visible to Validation.h
+unordered_map<uint32_t, uint64_t[MINMAX]> *transactionStats;
+
 //--------------------------------------------------
 static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
@@ -92,6 +98,8 @@ static void processDefineSchema(const DefineSchema& d) {
 	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
 	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
+	transactionStats =
+			new unordered_map<uint32_t, uint64_t[MINMAX]> [d.relationCount];
 
 }
 //--------------------------------------------------
@@ -100,7 +108,7 @@ static void processTransaction(const Transaction& t) {
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " "
 	<< t.insertCount << "]" << endl;
 #endif
-	vector<uint64_t*>* operations = new vector<uint64_t*>[relationCount];
+	vector<uint64_t*>* operations = new vector<uint64_t*> [relationCount];
 	const char* reader = t.operations;
 
 	// Delete all indicated tuples
@@ -121,14 +129,30 @@ static void processTransaction(const Transaction& t) {
 	// Insert new tuples
 	for (uint32_t index = 0; index != t.insertCount; ++index) {
 		auto& o = *reinterpret_cast<const TransactionOperationInsert*>(reader);
-		for (const uint64_t* values = o.values, *valuesLimit = values + (o.rowCount * schema[o.relationId]);
-				values != valuesLimit;
+		for (const uint64_t* values = o.values, *valuesLimit = values
+				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
 				values += schema[o.relationId]) {
 			uint64_t* tuple = new uint64_t[schema[o.relationId]];
 			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
 			operations[o.relationId].emplace_back(tuple);
 			relations[o.relationId][values[0]] = tuple;
+			//save stats
+			for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
+				if (transactionStats[o.relationId].find(i)
+						== transactionStats[o.relationId].end()) {
+					auto& minmax = transactionStats[o.relationId][i];
+					minmax[MIN] = values[i];
+					minmax[MAX] = values[i];
+				} else {
+					auto& minmax = transactionStats[o.relationId][i];
+					if (minmax[MIN] > values[i])
+						minmax[MIN] = values[i];
+					else if (minmax[MAX] < values[i])
+						minmax[MAX] = values[i];
+				}
+			}
 		}
+
 		reader += sizeof(TransactionOperationInsert)
 				+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
 	}
@@ -142,16 +166,18 @@ static void processValidationQueries(const ValidationQueries& v) {
 #ifdef DEBUG
 	cerr << "validation [" << v.validationId << " " << v.from << " " << v.to
 	<< " " << v.queryCount << "]" << endl;
+
 	unsigned qId = 0;
+
 #endif
 	auto from = transactionHistory.lower_bound(v.from);
 	auto to = transactionHistory.upper_bound(v.to);
 	bool conflict = false;
 	const char* reader = v.queries;
 
-	///////////////////////////////////////////////////////////////////////
-	//Sort the query based on the validation's query count
-	///////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////
+//Sort the query based on the validation's query count
+///////////////////////////////////////////////////////////////////////
 	Query* queries[v.queryCount];
 //	int pruned = 0;
 //	int invalid = 0;
@@ -169,12 +195,12 @@ static void processValidationQueries(const ValidationQueries& v) {
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
 
-	//cerr << pruned << "|" << v.queryCount << endl;
+//cerr << pruned << "|" << v.queryCount << endl;
 //	std::sort(queries, queries + pos, queryComparator);
 
-	///////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////
 
-	//Iterates through all sorted queries
+//Iterates through all sorted queries
 	for (unsigned index = 0; index != pos; ++index) {
 		auto q = queries[index];
 		//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
@@ -210,7 +236,6 @@ static void processValidationQueries(const ValidationQueries& v) {
 			}
 			cerr << q->columns[i].value << " ";
 		}
-
 		cerr << "]"<< endl;
 #endif
 
@@ -293,7 +318,8 @@ static void processFlush(const Flush& f) {
 //	}
 //	cout.flush();
 
-	while ((!queryResults.empty()) && ((*queryResults.begin()).first <= f.validationId)) {
+	while ((!queryResults.empty())
+			&& ((*queryResults.begin()).first <= f.validationId)) {
 		char c = '0' + (*queryResults.begin()).second;
 		cout.write(&c, 1);
 		queryResults.erase(queryResults.begin());
@@ -305,7 +331,7 @@ static void processForget(const Forget& f) {
 #ifdef DEBUG
 	cerr << "forget [" << f.transactionId << "]" << endl;
 #endif
-	//transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
+//transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
 	while ((!transactionHistory.empty())
 			&& ((*transactionHistory.begin()).first <= f.transactionId))
 		transactionHistory.erase(transactionHistory.begin());
@@ -321,9 +347,9 @@ template<typename Type> static const Type& readBody(istream& in,
 //--------------------------------------------------
 int main() {
 #ifdef CPU
-	cpu_set_t  mask;
+	cpu_set_t mask;
 	CPU_ZERO(&mask);
-	CPU_SET(0, &mask);
+	CPU_SET(2, &mask);
 	int result = sched_setaffinity(0, sizeof(mask), &mask);
 #endif
 	vector<char> message;

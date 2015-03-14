@@ -17,6 +17,8 @@
 #include "sparsehash/dense_hash_map.h"
 using namespace std;
 
+extern unordered_map<uint32_t, uint64_t[MINMAX]> *transactionStats;
+
 inline static bool isQueryValid(Query* q) {
 	/**
 	 * To value-initialize an object of type T means:
@@ -34,6 +36,54 @@ inline static bool isQueryValid(Query* q) {
 	//opsMap.set_empty_key(0);
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
+		if (transactionStats[q->relationId].find(curQueryOp->column)
+				!= transactionStats[q->relationId].end()) {
+			auto minmax = transactionStats[q->relationId][curQueryOp->column];
+			switch (curQueryOp->op) {
+			case Query::Column::Equal:
+				if (curQueryOp->value > minmax[MAX]
+						|| curQueryOp->value < minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::NotEqual:
+				if (curQueryOp->value == minmax[MAX]
+						&& minmax[MAX] == minmax[MIN]) {
+
+					return false;
+				}
+				break;
+
+			case Query::Column::Less:
+				if (curQueryOp->value <= minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::LessOrEqual:
+
+				if (curQueryOp->value < minmax[MIN])
+					return false;
+				break;
+
+			case Query::Column::Greater:
+
+				if (curQueryOp->value >= minmax[MAX])
+					return false;
+				break;
+			case Query::Column::GreaterOrEqual:
+
+				if (curQueryOp->value > minmax[MAX])
+					return false;
+				break;
+
+			case Query::Column::Invalid:
+				break;
+
+			}
+		}
+
 		//for each column check
 		auto t = opsMap.find(curQueryOp->column);
 		if (t == opsMap.end()) {
