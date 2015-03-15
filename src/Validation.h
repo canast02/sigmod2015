@@ -17,7 +17,51 @@
 #include "sparsehash/dense_hash_map.h"
 using namespace std;
 
-extern unordered_map<uint32_t, uint64_t[MINMAX]> *transactionStats;
+extern unordered_map<uint32_t, uint64_t[MINMAX]> *globalStats;
+extern unordered_map<uint64_t,
+		unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>> transactionStats;
+
+inline static unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedMinMax(
+		const uint64_t from, const uint64_t to) {
+	unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedStatP= new unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>();
+
+	auto& rangedStats=*rangedStatP;
+	//For each transaction in the transaction stats
+	for (auto& cur : transactionStats) {
+		if (cur.first < from || cur.first > to)
+			continue;
+
+		//For each relation per transaction
+		for (auto& relIter : cur.second) {
+			//Update Global stats
+			auto tStatsIterEnd = rangedStats[relIter.first].end();
+			for (auto& colIter : relIter.second) {
+				auto tStatsIter = rangedStats[relIter.first].find(
+						colIter.first);
+				if (tStatsIter == tStatsIterEnd) {
+					//create new 'i'
+					auto& minmax = rangedStats[relIter.first][colIter.first];
+					minmax[MIN] = colIter.second[MIN];
+					minmax[MAX] = colIter.second[MAX];
+				} else {
+
+					auto& minmax = tStatsIter->second;
+
+					if (minmax[MIN] > colIter.second[MIN]) {
+						minmax[MIN] = colIter.second[MIN];
+					}
+					if (minmax[MAX] < colIter.second[MAX]) {
+						minmax[MAX] = colIter.second[MAX];
+					}
+				}
+
+			}
+		}
+	}
+
+	return rangedStatP;
+
+}
 
 inline static bool isQueryValid(Query* q) {
 	/**
@@ -34,63 +78,17 @@ inline static bool isQueryValid(Query* q) {
 	 * and before calling any other dense_hash_map method.
 	 */
 	//opsMap.set_empty_key(0);
+	//store end iteration
+	auto opsMapIterEnd = opsMap.end();
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
-		if (transactionStats[q->relationId].find(curQueryOp->column)
-				!= transactionStats[q->relationId].end()) {
-			auto minmax = transactionStats[q->relationId][curQueryOp->column];
-			switch (curQueryOp->op) {
-			case Query::Column::Equal:
-				if (curQueryOp->value > minmax[MAX]
-						|| curQueryOp->value < minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::NotEqual:
-				if (curQueryOp->value == minmax[MAX]
-						&& minmax[MAX] == minmax[MIN]) {
-
-					return false;
-				}
-				break;
-
-			case Query::Column::Less:
-				if (curQueryOp->value <= minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::LessOrEqual:
-
-				if (curQueryOp->value < minmax[MIN])
-					return false;
-				break;
-
-			case Query::Column::Greater:
-
-				if (curQueryOp->value >= minmax[MAX])
-					return false;
-				break;
-			case Query::Column::GreaterOrEqual:
-
-				if (curQueryOp->value > minmax[MAX])
-					return false;
-				break;
-
-			case Query::Column::Invalid:
-				break;
-
-			}
-		}
-
-		//for each column check
-		auto t = opsMap.find(curQueryOp->column);
-		if (t == opsMap.end()) {
+			//for each column check
+		auto opsMapIter = opsMap.find(curQueryOp->column);
+		if (opsMapIter == opsMapIterEnd) {
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
 		} else {
 			//Get the column from the columns map
-			std::array<Query::Column*, OPERATORS> opColumn = t->second;
+			std::array<Query::Column*, OPERATORS> opColumn = opsMapIter->second;
 
 			//Fill the operation list
 			if (opColumn[curQueryOp->op] == NULL
@@ -579,6 +577,127 @@ inline static bool isQueryValid(Query* q) {
 			}
 
 		}
+	}
+	return true;
+
+}
+
+inline static bool isGlobalQueryValid(Query* q) {
+	//store end iteration
+	auto tStatsIterEnd = globalStats[q->relationId].end();
+	for (unsigned i = 0; i < q->columnCount; i++) {
+		auto curQueryOp = &(q->columns[i]);
+		auto tStatsIter = globalStats[q->relationId].find(curQueryOp->column);
+
+		if (tStatsIter != tStatsIterEnd) {
+			auto& minmax = tStatsIter->second;
+			switch (curQueryOp->op) {
+
+			case Query::Column::Equal:
+				if (curQueryOp->value > minmax[MAX]
+						|| curQueryOp->value < minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::NotEqual:
+				if (curQueryOp->value == minmax[MAX]
+						&& minmax[MAX] == minmax[MIN]) {
+
+					return false;
+				}
+				break;
+
+			case Query::Column::Less:
+				if (curQueryOp->value <= minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::LessOrEqual:
+
+				if (curQueryOp->value < minmax[MIN])
+					return false;
+				break;
+
+			case Query::Column::Greater:
+
+				if (curQueryOp->value >= minmax[MAX])
+					return false;
+				break;
+			case Query::Column::GreaterOrEqual:
+
+				if (curQueryOp->value > minmax[MAX])
+					return false;
+				break;
+
+			case Query::Column::Invalid:
+				break;
+			}
+		}
+	}
+	return true;
+
+}
+
+inline static bool isLocalQueryValid(Query* q, unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedStatP) {
+	auto& rangedStats=*rangedStatP;
+	//store end iteration
+	auto tStatsIterEnd = globalStats[q->relationId].end();
+	for (unsigned i = 0; i < q->columnCount; i++) {
+		auto curQueryOp = &(q->columns[i]);
+
+		//Ranged check
+		tStatsIterEnd = rangedStats[q->relationId].end();
+		auto tStatsIter = rangedStats[q->relationId].find(curQueryOp->column);
+
+		if (tStatsIter != tStatsIterEnd) {
+			auto& minmax = tStatsIter->second;
+			switch (curQueryOp->op) {
+
+			case Query::Column::Equal:
+				if (curQueryOp->value > minmax[MAX]
+						|| curQueryOp->value < minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::NotEqual:
+				if (curQueryOp->value == minmax[MAX]
+						&& minmax[MAX] == minmax[MIN]) {
+
+					return false;
+				}
+				break;
+
+			case Query::Column::Less:
+				if (curQueryOp->value <= minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::LessOrEqual:
+
+				if (curQueryOp->value < minmax[MIN])
+					return false;
+				break;
+
+			case Query::Column::Greater:
+
+				if (curQueryOp->value >= minmax[MAX])
+					return false;
+				break;
+			case Query::Column::GreaterOrEqual:
+
+				if (curQueryOp->value > minmax[MAX])
+					return false;
+				break;
+
+			case Query::Column::Invalid:
+				break;
+			}
+		}
+
 	}
 	return true;
 

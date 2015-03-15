@@ -80,7 +80,9 @@ static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 
 //GLOBAL visible to Validation.h
-unordered_map<uint32_t, uint64_t[MINMAX]> *transactionStats;
+unordered_map<uint32_t, uint64_t[MINMAX]> *globalStats;
+unordered_map<uint64_t,
+		unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>> transactionStats;
 
 //--------------------------------------------------
 static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
@@ -98,7 +100,7 @@ static void processDefineSchema(const DefineSchema& d) {
 	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
 	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
-	transactionStats =
+	globalStats =
 			new unordered_map<uint32_t, uint64_t[MINMAX]> [d.relationCount];
 
 }
@@ -111,6 +113,9 @@ static void processTransaction(const Transaction& t) {
 	vector<uint64_t*>* operations = new vector<uint64_t*> [relationCount];
 	const char* reader = t.operations;
 
+	//create per transaction minmax
+	auto& tLocalMap = transactionStats[t.transactionId];
+
 	// Delete all indicated tuples
 	for (uint32_t index = 0; index != t.deleteCount; ++index) {
 		auto& o = *reinterpret_cast<const TransactionOperationDelete*>(reader);
@@ -118,6 +123,56 @@ static void processTransaction(const Transaction& t) {
 				key != keyLimit; ++key) {
 			auto rel = relations[o.relationId].find(*key);
 			if (rel != relations[o.relationId].end()) {
+				/*****************************************************/
+				//save stats
+				/*****************************************************/
+				uint64_t* values = rel->second;
+				auto tStatsIterEnd = globalStats[o.relationId].end();
+				auto tLocalStatsIterEnd = tLocalMap[o.relationId].end();
+				for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
+					/////////////////////////////////////////////
+					//Local stats
+					/////////////////////////////////////////////
+					auto tLocalStatsIter = tLocalMap[o.relationId].find(i);
+					if (tLocalStatsIter == tLocalStatsIterEnd) {
+						//create new 'i'
+						auto& minmax = tLocalMap[o.relationId][i];
+						minmax[MIN] = values[i];
+						minmax[MAX] = values[i];
+					} else {
+						auto& minmax = tLocalStatsIter->second;
+						if (minmax[MIN] > values[i]) {
+							minmax[MIN] = values[i];
+						} else if (minmax[MAX] < values[i]) {
+							minmax[MAX] = values[i];
+						}
+					}
+
+					/////////////////////////////////////////////
+					//Global stats
+					/////////////////////////////////////////////
+					auto tStatsIter = globalStats[o.relationId].find(i);
+					if (tStatsIter == tStatsIterEnd) {
+						//create new 'i'
+						auto& minmax = globalStats[o.relationId][i];
+						minmax[MIN] = values[i];
+						minmax[MAX] = values[i];
+					} else {
+
+						auto& minmax = tStatsIter->second;
+						if (minmax[MIN] > values[i]) {
+							minmax[MIN] = values[i];
+						} else if (minmax[MAX] < values[i]) {
+							minmax[MAX] = values[i];
+						}
+					}
+
+				}
+
+				/*****************************************************/
+				//save stats
+				/*****************************************************/
+
 				operations[o.relationId].emplace_back(move(rel->second));
 				relations[o.relationId].erase(rel);
 			}
@@ -136,23 +191,56 @@ static void processTransaction(const Transaction& t) {
 			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
 			operations[o.relationId].emplace_back(tuple);
 			relations[o.relationId][values[0]] = tuple;
+
+			/*****************************************************/
 			//save stats
+			/*****************************************************/
+			auto tStatsIterEnd = globalStats[o.relationId].end();
+			auto tLocalStatsIterEnd = tLocalMap[o.relationId].end();
 			for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
-				if (transactionStats[o.relationId].find(i)
-						== transactionStats[o.relationId].end()) {
-					auto& minmax = transactionStats[o.relationId][i];
+				/////////////////////////////////////////////
+				//Local stats
+				/////////////////////////////////////////////
+				auto tLocalStatsIter = tLocalMap[o.relationId].find(i);
+				if (tLocalStatsIter == tLocalStatsIterEnd) {
+					//create new 'i'
+					auto& minmax = tLocalMap[o.relationId][i];
+
 					minmax[MIN] = values[i];
 					minmax[MAX] = values[i];
 				} else {
-					auto& minmax = transactionStats[o.relationId][i];
-					if (minmax[MIN] > values[i])
+
+					auto& minmax = tLocalStatsIter->second;
+					if (minmax[MIN] > values[i]) {
 						minmax[MIN] = values[i];
-					else if (minmax[MAX] < values[i])
+					} else if (minmax[MAX] < values[i]) {
 						minmax[MAX] = values[i];
+					}
+				}
+				/////////////////////////////////////////////
+				//Global stats
+				/////////////////////////////////////////////
+				auto tStatsIter = globalStats[o.relationId].find(i);
+				if (tStatsIter == tStatsIterEnd) {
+					//create new 'i'
+					auto& minmax = globalStats[o.relationId][i];
+					minmax[MIN] = values[i];
+					minmax[MAX] = values[i];
+				} else {
+
+					auto& minmax = tStatsIter->second;
+					if (minmax[MIN] > values[i]) {
+						minmax[MIN] = values[i];
+					} else if (minmax[MAX] < values[i]) {
+						minmax[MAX] = values[i];
+					}
 				}
 			}
-		}
+			/*****************************************************/
+			//save stats
+			/*****************************************************/
 
+		}
 		reader += sizeof(TransactionOperationInsert)
 				+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
 	}
@@ -160,7 +248,6 @@ static void processTransaction(const Transaction& t) {
 	transactionHistory[t.transactionId] = operations;
 }
 //--------------------------------------------------
-
 static void processValidationQueries(const ValidationQueries& v) {
 
 #ifdef DEBUG
@@ -179,27 +266,23 @@ static void processValidationQueries(const ValidationQueries& v) {
 //Sort the query based on the validation's query count
 ///////////////////////////////////////////////////////////////////////
 	Query* queries[v.queryCount];
-//	int pruned = 0;
-//	int invalid = 0;
 	uint32_t pos = 0;
+
 	for (unsigned index = 0; index != v.queryCount; ++index) {
 		auto q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
-		if (isQueryValid(q)) {
+
+		if (isGlobalQueryValid(q)) {
+			queries[pos] = q;
+			pos++;
+		} else if (isQueryValid(q)) {
 			queries[pos] = q;
 			pos++;
 		}
-
-//		else {
-//			++pruned;
-//		}
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
 
-//cerr << pruned << "|" << v.queryCount << endl;
-//	std::sort(queries, queries + pos, queryComparator);
-
 ///////////////////////////////////////////////////////////////////////
-
+	//std::sort(queries, queries + pos, queryComparator);
 //Iterates through all sorted queries
 	for (unsigned index = 0; index != pos; ++index) {
 		auto q = queries[index];
@@ -238,12 +321,67 @@ static void processValidationQueries(const ValidationQueries& v) {
 		}
 		cerr << "]"<< endl;
 #endif
-
-//		cerr << "Equal =" << Equal << ", NotEqual =" << NotEqual << ", Less ="
-//				<< Less << ", LessOrEqual =" << LessOrEqual << ", Greater ="
-//				<< Greater << ", GreaterOrEqual =" << GreaterOrEqual << endl;
 		for (auto iter = from; iter != to; ++iter) {
+			/*			if ((*iter).second[q->relationId].size() == 0)
+			 continue;
+			 if ((*iter).second[q->relationId].size() >= 10) {
+			 auto c = q->columns;
+			 bool match = true;
+			 auto cLimit = c + q->columnCount;
+			 auto tStatsIterEnd = globalStats[q->relationId].end();
+			 for (; c != cLimit; ++c) {
+			 bool result = true;
+			 auto tStatsIter = globalStats[q->relationId].find(
+			 c->column);
 
+			 if (tStatsIter != tStatsIterEnd) {
+			 auto& minmax = tStatsIter->second;
+			 switch (c->op) {
+
+			 case Query::Column::Equal:
+			 if (c->value > minmax[MAX]
+			 || c->value < minmax[MIN]) {
+			 result = false;
+			 }
+			 break;
+			 case Query::Column::NotEqual:
+			 if (c->value == minmax[MAX]
+			 && minmax[MAX] == minmax[MIN]) {
+
+			 result = false;
+			 }
+			 break;
+			 case Query::Column::Less:
+			 if (c->value <= minmax[MIN]) {
+			 result = false;
+			 }
+			 break;
+			 case Query::Column::LessOrEqual:
+
+			 if (c->value < minmax[MIN])
+			 result = false;
+			 break;
+			 case Query::Column::Greater:
+			 if (c->value >= minmax[MAX])
+			 result = false;
+			 break;
+			 case Query::Column::GreaterOrEqual:
+			 if (c->value > minmax[MAX])
+			 result = false;
+			 break;
+			 case Query::Column::Invalid:
+			 break;
+			 }
+			 }
+			 if (!result) {
+			 match = false;
+			 break;
+			 }
+			 }
+			 if (!match)
+			 continue;
+			 }
+			 */
 			for (auto& tuple : (*iter).second[q->relationId]) {
 
 				bool match = true;
@@ -333,8 +471,45 @@ static void processForget(const Forget& f) {
 #endif
 //transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
 	while ((!transactionHistory.empty())
-			&& ((*transactionHistory.begin()).first <= f.transactionId))
+			&& ((*transactionHistory.begin()).first <= f.transactionId)) {
+		//transactionStats.erase(transactionHistory.begin()->first);
 		transactionHistory.erase(transactionHistory.begin());
+	}
+	/*
+	 delete[] globalStats;
+	 globalStats = new unordered_map<uint32_t, uint64_t[MINMAX]> [relationCount];
+	 //For each transaction in the transaction stats
+	 for (auto& cur : transactionStats) {
+	 if (cur.first <= f.transactionId)
+	 continue;
+	 //For each relation per transaction
+	 for (auto& relIter : cur.second) {
+	 //Update Global stats
+	 auto tStatsIterEnd = globalStats[relIter.first].end();
+	 for (auto& colIter : relIter.second) {
+	 auto tStatsIter = globalStats[relIter.first].find(
+	 colIter.first);
+	 if (tStatsIter == tStatsIterEnd) {
+	 //create new 'i'
+	 auto& minmax = globalStats[relIter.first][colIter.first];
+	 minmax[MIN] = colIter.second[MIN];
+	 minmax[MAX] = colIter.second[MAX];
+	 } else {
+
+	 auto& minmax = tStatsIter->second;
+
+	 if (minmax[MIN] > colIter.second[MIN]) {
+	 minmax[MIN] = colIter.second[MIN];
+	 }
+	 if (minmax[MAX] < colIter.second[MAX]) {
+	 minmax[MAX] = colIter.second[MAX];
+	 }
+	 }
+
+	 }
+	 }
+	 }
+	 */
 }
 //--------------------------------------------------
 // Read the message body and cast it to the desired type
@@ -350,7 +525,7 @@ int main() {
 	cpu_set_t mask;
 	CPU_ZERO(&mask);
 	CPU_SET(2, &mask);
-	int result = sched_setaffinity(0, sizeof(mask), &mask);
+	sched_setaffinity(0, sizeof(mask), &mask);
 #endif
 	vector<char> message;
 	std::ios_base::sync_with_stdio(false);
