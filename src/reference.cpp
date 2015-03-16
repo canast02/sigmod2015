@@ -80,9 +80,9 @@ static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 
 //GLOBAL visible to Validation.h
-unordered_map<uint32_t, uint64_t[MINMAX]> *globalStats;
+vector<std::array<uint64_t, MINMAX>>* globalStats;
 unordered_map<uint64_t,
-		unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>> transactionStats;
+		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>> > transactionStats;
 
 //--------------------------------------------------
 static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
@@ -100,8 +100,7 @@ static void processDefineSchema(const DefineSchema& d) {
 	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
 	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
-	globalStats =
-			new unordered_map<uint32_t, uint64_t[MINMAX]> [d.relationCount];
+	globalStats = new vector<std::array<uint64_t, MINMAX>> [d.relationCount];
 
 }
 //--------------------------------------------------
@@ -114,7 +113,7 @@ static void processTransaction(const Transaction& t) {
 	const char* reader = t.operations;
 
 	//create per transaction minmax
-	auto& tLocalMap = transactionStats[t.transactionId];
+//	auto& tLocalMap = transactionStats[t.transactionId];
 
 	// Delete all indicated tuples
 	for (uint32_t index = 0; index != t.deleteCount; ++index) {
@@ -127,39 +126,39 @@ static void processTransaction(const Transaction& t) {
 				//save stats
 				/*****************************************************/
 				uint64_t* values = rel->second;
-				auto tStatsIterEnd = globalStats[o.relationId].end();
-				auto tLocalStatsIterEnd = tLocalMap[o.relationId].end();
 				for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
 					/////////////////////////////////////////////
 					//Local stats
 					/////////////////////////////////////////////
-					auto tLocalStatsIter = tLocalMap[o.relationId].find(i);
-					if (tLocalStatsIter == tLocalStatsIterEnd) {
+/*					auto size = tLocalMap[o.relationId].size();
+					if (size <= i) {
 						//create new 'i'
-						auto& minmax = tLocalMap[o.relationId][i];
+						std::array<uint64_t, MINMAX> minmax;
 						minmax[MIN] = values[i];
 						minmax[MAX] = values[i];
+						tLocalMap[o.relationId].emplace_back(move(minmax));
 					} else {
-						auto& minmax = tLocalStatsIter->second;
+						auto& minmax = tLocalMap[o.relationId][i];
 						if (minmax[MIN] > values[i]) {
 							minmax[MIN] = values[i];
 						} else if (minmax[MAX] < values[i]) {
 							minmax[MAX] = values[i];
 						}
 					}
-
+*/
 					/////////////////////////////////////////////
 					//Global stats
 					/////////////////////////////////////////////
-					auto tStatsIter = globalStats[o.relationId].find(i);
-					if (tStatsIter == tStatsIterEnd) {
+					auto size = globalStats[o.relationId].size();
+					if (size <= i) {
 						//create new 'i'
-						auto& minmax = globalStats[o.relationId][i];
+						std::array<uint64_t, MINMAX> minmax;
 						minmax[MIN] = values[i];
 						minmax[MAX] = values[i];
+						globalStats[o.relationId].emplace_back(minmax);
 					} else {
 
-						auto& minmax = tStatsIter->second;
+						auto& minmax = globalStats[o.relationId][i];
 						if (minmax[MIN] > values[i]) {
 							minmax[MIN] = values[i];
 						} else if (minmax[MAX] < values[i]) {
@@ -195,40 +194,40 @@ static void processTransaction(const Transaction& t) {
 			/*****************************************************/
 			//save stats
 			/*****************************************************/
-			auto tStatsIterEnd = globalStats[o.relationId].end();
-			auto tLocalStatsIterEnd = tLocalMap[o.relationId].end();
 			for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
 				/////////////////////////////////////////////
 				//Local stats
 				/////////////////////////////////////////////
-				auto tLocalStatsIter = tLocalMap[o.relationId].find(i);
-				if (tLocalStatsIter == tLocalStatsIterEnd) {
+/*				auto size = tLocalMap[o.relationId].size();
+				if (size <= i) {
 					//create new 'i'
-					auto& minmax = tLocalMap[o.relationId][i];
-
+					std::array<uint64_t, MINMAX> minmax;
 					minmax[MIN] = values[i];
 					minmax[MAX] = values[i];
+					tLocalMap[o.relationId].emplace_back(move(minmax));
 				} else {
 
-					auto& minmax = tLocalStatsIter->second;
+					auto& minmax = tLocalMap[o.relationId][i];
 					if (minmax[MIN] > values[i]) {
 						minmax[MIN] = values[i];
 					} else if (minmax[MAX] < values[i]) {
 						minmax[MAX] = values[i];
 					}
 				}
+				*/
 				/////////////////////////////////////////////
 				//Global stats
 				/////////////////////////////////////////////
-				auto tStatsIter = globalStats[o.relationId].find(i);
-				if (tStatsIter == tStatsIterEnd) {
+				auto size = globalStats[o.relationId].size();
+				if (size <= i) {
 					//create new 'i'
-					auto& minmax = globalStats[o.relationId][i];
+					std::array<uint64_t, MINMAX> minmax;
 					minmax[MIN] = values[i];
 					minmax[MAX] = values[i];
+					globalStats[o.relationId].emplace_back(minmax);
 				} else {
 
-					auto& minmax = tStatsIter->second;
+					auto& minmax = globalStats[o.relationId][i];
 					if (minmax[MIN] > values[i]) {
 						minmax[MIN] = values[i];
 					} else if (minmax[MAX] < values[i]) {
@@ -261,7 +260,7 @@ static void processValidationQueries(const ValidationQueries& v) {
 	auto to = transactionHistory.upper_bound(v.to);
 	bool conflict = false;
 	const char* reader = v.queries;
-
+	unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* ranged=NULL;
 ///////////////////////////////////////////////////////////////////////
 //Sort the query based on the validation's query count
 ///////////////////////////////////////////////////////////////////////
@@ -274,10 +273,28 @@ static void processValidationQueries(const ValidationQueries& v) {
 		if (isGlobalQueryValid(q)) {
 			queries[pos] = q;
 			pos++;
-		} else if (isQueryValid(q)) {
-			queries[pos] = q;
-			pos++;
-		}
+		}/* else {
+			if (ranged == NULL
+					&& (v.to - v.from) < 100) {
+		//	cerr<<v.queryCount<<","<<(v.to - v.from)<<endl;
+				ranged = rangedMinMax(v.from, v.to);
+
+				if (isLocalQueryValid(q, ranged)) {
+					queries[pos] = q;
+					pos++;
+				} else
+
+
+					if (isQueryValid(q)) {
+					queries[pos] = q;
+					pos++;
+				}
+
+			} */else if (isQueryValid(q)) {
+				queries[pos] = q;
+				pos++;
+			}
+//		}
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
 

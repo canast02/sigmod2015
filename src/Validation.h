@@ -17,41 +17,41 @@
 #include "sparsehash/dense_hash_map.h"
 using namespace std;
 
-extern unordered_map<uint32_t, uint64_t[MINMAX]> *globalStats;
+extern vector<std::array<uint64_t, MINMAX>>*globalStats;
 extern unordered_map<uint64_t,
-		unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>> transactionStats;
+		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>> > transactionStats;
 
-inline static unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedMinMax(
+inline static unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* rangedMinMax(
 		const uint64_t from, const uint64_t to) {
-	unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedStatP= new unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>();
+	unordered_map<uint32_t,vector<std::array<uint64_t,MINMAX>>>* rangedStatP =
+	new unordered_map<uint32_t,vector<std::array<uint64_t,MINMAX>>>();
 
-	auto& rangedStats=*rangedStatP;
+	auto& rangedStats = *rangedStatP;
 	//For each transaction in the transaction stats
 	for (auto& cur : transactionStats) {
 		if (cur.first < from || cur.first > to)
-			continue;
+		continue;
 
 		//For each relation per transaction
 		for (auto& relIter : cur.second) {
 			//Update Global stats
-			auto tStatsIterEnd = rangedStats[relIter.first].end();
-			for (auto& colIter : relIter.second) {
-				auto tStatsIter = rangedStats[relIter.first].find(
-						colIter.first);
-				if (tStatsIter == tStatsIterEnd) {
+			for (uint32_t i = 0; i != relIter.second.size(); ++i) {
+				if (rangedStats[relIter.first].size()<=i) {
 					//create new 'i'
-					auto& minmax = rangedStats[relIter.first][colIter.first];
-					minmax[MIN] = colIter.second[MIN];
-					minmax[MAX] = colIter.second[MAX];
+					auto& mine=relIter.second[i];
+					std::array<uint64_t, MINMAX> minmax;
+					minmax[MIN] = mine[MIN];
+					minmax[MAX] = mine[MAX];
+					rangedStats[relIter.first].emplace_back(move(minmax));
 				} else {
 
-					auto& minmax = tStatsIter->second;
+					auto& minmax = rangedStats[relIter.first][i];
 
-					if (minmax[MIN] > colIter.second[MIN]) {
-						minmax[MIN] = colIter.second[MIN];
+					if (minmax[MIN] > relIter.second[i][MIN]) {
+						minmax[MIN] = relIter.second[i][MIN];
 					}
-					if (minmax[MAX] < colIter.second[MAX]) {
-						minmax[MAX] = colIter.second[MAX];
+					if (minmax[MAX] < relIter.second[i][MAX]) {
+						minmax[MAX] = relIter.second[i][MAX];
 					}
 				}
 
@@ -82,7 +82,7 @@ inline static bool isQueryValid(Query* q) {
 	auto opsMapIterEnd = opsMap.end();
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
-			//for each column check
+		//for each column check
 		auto opsMapIter = opsMap.find(curQueryOp->column);
 		if (opsMapIter == opsMapIterEnd) {
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
@@ -584,13 +584,11 @@ inline static bool isQueryValid(Query* q) {
 
 inline static bool isGlobalQueryValid(Query* q) {
 	//store end iteration
-	auto tStatsIterEnd = globalStats[q->relationId].end();
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
-		auto tStatsIter = globalStats[q->relationId].find(curQueryOp->column);
-
-		if (tStatsIter != tStatsIterEnd) {
-			auto& minmax = tStatsIter->second;
+		auto size = globalStats[q->relationId].size();
+		if (size <= i) {
+			auto& minmax = globalStats[q->relationId][i];
 			switch (curQueryOp->op) {
 
 			case Query::Column::Equal:
@@ -640,19 +638,17 @@ inline static bool isGlobalQueryValid(Query* q) {
 
 }
 
-inline static bool isLocalQueryValid(Query* q, unordered_map<uint32_t, unordered_map<uint32_t, uint64_t[MINMAX]>>* rangedStatP) {
-	auto& rangedStats=*rangedStatP;
+inline static bool isLocalQueryValid(Query* q,
+		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* rangedStatP) {
+	auto& rangedStats = *rangedStatP;
 	//store end iteration
-	auto tStatsIterEnd = globalStats[q->relationId].end();
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 
 		//Ranged check
-		tStatsIterEnd = rangedStats[q->relationId].end();
-		auto tStatsIter = rangedStats[q->relationId].find(curQueryOp->column);
-
-		if (tStatsIter != tStatsIterEnd) {
-			auto& minmax = tStatsIter->second;
+		auto size = rangedStats[q->relationId].size();
+		if (size <= i) {
+			auto& minmax = globalStats[q->relationId][i];
 			switch (curQueryOp->op) {
 
 			case Query::Column::Equal:
