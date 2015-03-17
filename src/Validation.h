@@ -17,51 +17,7 @@
 #include "sparsehash/dense_hash_map.h"
 using namespace std;
 
-extern vector<std::array<uint64_t, MINMAX>>*globalStats;
-extern unordered_map<uint64_t,
-		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>> > transactionStats;
-
-inline static unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* rangedMinMax(
-		const uint64_t from, const uint64_t to) {
-	unordered_map<uint32_t,vector<std::array<uint64_t,MINMAX>>>* rangedStatP =
-	new unordered_map<uint32_t,vector<std::array<uint64_t,MINMAX>>>();
-
-	auto& rangedStats = *rangedStatP;
-	//For each transaction in the transaction stats
-	for (auto& cur : transactionStats) {
-		if (cur.first < from || cur.first > to)
-		continue;
-
-		//For each relation per transaction
-		for (auto& relIter : cur.second) {
-			//Update Global stats
-			for (uint32_t i = 0; i != relIter.second.size(); ++i) {
-				if (rangedStats[relIter.first].size()<=i) {
-					//create new 'i'
-					auto& mine=relIter.second[i];
-					std::array<uint64_t, MINMAX> minmax;
-					minmax[MIN] = mine[MIN];
-					minmax[MAX] = mine[MAX];
-					rangedStats[relIter.first].emplace_back(move(minmax));
-				} else {
-
-					auto& minmax = rangedStats[relIter.first][i];
-
-					if (minmax[MIN] > relIter.second[i][MIN]) {
-						minmax[MIN] = relIter.second[i][MIN];
-					}
-					if (minmax[MAX] < relIter.second[i][MAX]) {
-						minmax[MAX] = relIter.second[i][MAX];
-					}
-				}
-
-			}
-		}
-	}
-
-	return rangedStatP;
-
-}
+extern unordered_map<uint32_t, std::array<uint64_t,MINMAX>>*transactionStats;
 
 inline static bool isQueryValid(Query* q) {
 	/**
@@ -78,17 +34,66 @@ inline static bool isQueryValid(Query* q) {
 	 * and before calling any other dense_hash_map method.
 	 */
 	//opsMap.set_empty_key(0);
-	//store end iteration
-	auto opsMapIterEnd = opsMap.end();
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
+		/**
+		 * In the parallel version the condition is needed
+		 */
+		if (transactionStats[q->relationId].find(curQueryOp->column)
+				!= transactionStats[q->relationId].end()) {
+			auto& minmax = transactionStats[q->relationId][curQueryOp->column];
+			switch (curQueryOp->op) {
+			case Query::Column::Equal:
+				if (curQueryOp->value > minmax[MAX]
+						|| curQueryOp->value < minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::NotEqual:
+				if (curQueryOp->value == minmax[MAX]
+						&& minmax[MAX] == minmax[MIN]) {
+
+					return false;
+				}
+				break;
+
+			case Query::Column::Less:
+				if (curQueryOp->value <= minmax[MIN]) {
+					return false;
+				}
+				break;
+
+			case Query::Column::LessOrEqual:
+
+				if (curQueryOp->value < minmax[MIN])
+					return false;
+				break;
+
+			case Query::Column::Greater:
+
+				if (curQueryOp->value >= minmax[MAX])
+					return false;
+				break;
+			case Query::Column::GreaterOrEqual:
+
+				if (curQueryOp->value > minmax[MAX])
+					return false;
+				break;
+
+			case Query::Column::Invalid:
+				break;
+
+			}
+		}
+
 		//for each column check
-		auto opsMapIter = opsMap.find(curQueryOp->column);
-		if (opsMapIter == opsMapIterEnd) {
+		auto t = opsMap.find(curQueryOp->column);
+		if (t == opsMap.end()) {
 			opsMap[curQueryOp->column][curQueryOp->op] = curQueryOp;
 		} else {
 			//Get the column from the columns map
-			std::array<Query::Column*, OPERATORS> opColumn = opsMapIter->second;
+			std::array<Query::Column*, OPERATORS>& opColumn = t->second;
 
 			//Fill the operation list
 			if (opColumn[curQueryOp->op] == NULL
@@ -577,123 +582,6 @@ inline static bool isQueryValid(Query* q) {
 			}
 
 		}
-	}
-	return true;
-
-}
-
-inline static bool isGlobalQueryValid(Query* q) {
-	//store end iteration
-	for (unsigned i = 0; i < q->columnCount; i++) {
-		auto curQueryOp = &(q->columns[i]);
-		auto size = globalStats[q->relationId].size();
-		if (size <= i) {
-			auto& minmax = globalStats[q->relationId][i];
-			switch (curQueryOp->op) {
-
-			case Query::Column::Equal:
-				if (curQueryOp->value > minmax[MAX]
-						|| curQueryOp->value < minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::NotEqual:
-				if (curQueryOp->value == minmax[MAX]
-						&& minmax[MAX] == minmax[MIN]) {
-
-					return false;
-				}
-				break;
-
-			case Query::Column::Less:
-				if (curQueryOp->value <= minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::LessOrEqual:
-
-				if (curQueryOp->value < minmax[MIN])
-					return false;
-				break;
-
-			case Query::Column::Greater:
-
-				if (curQueryOp->value >= minmax[MAX])
-					return false;
-				break;
-			case Query::Column::GreaterOrEqual:
-
-				if (curQueryOp->value > minmax[MAX])
-					return false;
-				break;
-
-			case Query::Column::Invalid:
-				break;
-			}
-		}
-	}
-	return true;
-
-}
-
-inline static bool isLocalQueryValid(Query* q,
-		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* rangedStatP) {
-	auto& rangedStats = *rangedStatP;
-	//store end iteration
-	for (unsigned i = 0; i < q->columnCount; i++) {
-		auto curQueryOp = &(q->columns[i]);
-
-		//Ranged check
-		auto size = rangedStats[q->relationId].size();
-		if (size <= i) {
-			auto& minmax = globalStats[q->relationId][i];
-			switch (curQueryOp->op) {
-
-			case Query::Column::Equal:
-				if (curQueryOp->value > minmax[MAX]
-						|| curQueryOp->value < minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::NotEqual:
-				if (curQueryOp->value == minmax[MAX]
-						&& minmax[MAX] == minmax[MIN]) {
-
-					return false;
-				}
-				break;
-
-			case Query::Column::Less:
-				if (curQueryOp->value <= minmax[MIN]) {
-					return false;
-				}
-				break;
-
-			case Query::Column::LessOrEqual:
-
-				if (curQueryOp->value < minmax[MIN])
-					return false;
-				break;
-
-			case Query::Column::Greater:
-
-				if (curQueryOp->value >= minmax[MAX])
-					return false;
-				break;
-			case Query::Column::GreaterOrEqual:
-
-				if (curQueryOp->value > minmax[MAX])
-					return false;
-				break;
-
-			case Query::Column::Invalid:
-				break;
-			}
-		}
-
 	}
 	return true;
 

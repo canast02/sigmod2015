@@ -80,13 +80,15 @@ static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 
 //GLOBAL visible to Validation.h
-vector<std::array<uint64_t, MINMAX>>* globalStats;
-unordered_map<uint64_t,
-		unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>> > transactionStats;
+unordered_map<uint32_t, std::array<uint64_t, MINMAX>> *transactionStats;
 
 //--------------------------------------------------
 static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
+
+#ifdef HISTOGRAM
+static unordered_map<uint64_t, uint64_t> histogram;
+#endif
 //--------------------------------------------------
 
 static void processDefineSchema(const DefineSchema& d) {
@@ -100,153 +102,124 @@ static void processDefineSchema(const DefineSchema& d) {
 	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
 	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
-	globalStats = new vector<std::array<uint64_t, MINMAX>> [d.relationCount];
+	transactionStats =
+			new unordered_map<uint32_t, std::array<uint64_t, MINMAX>> [d.relationCount];
 
 }
 //--------------------------------------------------
 static void processTransaction(const Transaction& t) {
+
 #ifdef DEBUG
+	const char* reader1 = t.operations;
+	uint32_t k = 0;
 	cerr << "transaction [" << t.transactionId << " " << t.deleteCount << " "
-	<< t.insertCount << "]" << endl;
-#endif
-	vector<uint64_t*>* operations = new vector<uint64_t*> [relationCount];
-	const char* reader = t.operations;
+	<< t.insertCount << "] [";
 
-	//create per transaction minmax
-//	auto& tLocalMap = transactionStats[t.transactionId];
-
-	// Delete all indicated tuples
-	for (uint32_t index = 0; index != t.deleteCount; ++index) {
-		auto& o = *reinterpret_cast<const TransactionOperationDelete*>(reader);
-		for (const uint64_t* key = o.keys, *keyLimit = key + o.rowCount;
+	for (auto dindex = 0; dindex != t.deleteCount; ++dindex) {
+		auto o = reinterpret_cast<const TransactionOperationDelete*>(reader1);
+		cerr << "[" << o->relationId << "]";
+		for (const uint64_t* key = o->keys, *keyLimit = key + o->rowCount;
 				key != keyLimit; ++key) {
-			auto rel = relations[o.relationId].find(*key);
-			if (rel != relations[o.relationId].end()) {
-				/*****************************************************/
-				//save stats
-				/*****************************************************/
-				uint64_t* values = rel->second;
-				for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
-					/////////////////////////////////////////////
-					//Local stats
-					/////////////////////////////////////////////
-/*					auto size = tLocalMap[o.relationId].size();
-					if (size <= i) {
-						//create new 'i'
-						std::array<uint64_t, MINMAX> minmax;
-						minmax[MIN] = values[i];
-						minmax[MAX] = values[i];
-						tLocalMap[o.relationId].emplace_back(move(minmax));
-					} else {
-						auto& minmax = tLocalMap[o.relationId][i];
-						if (minmax[MIN] > values[i]) {
-							minmax[MIN] = values[i];
-						} else if (minmax[MAX] < values[i]) {
-							minmax[MAX] = values[i];
-						}
-					}
-*/
-					/////////////////////////////////////////////
-					//Global stats
-					/////////////////////////////////////////////
-					auto size = globalStats[o.relationId].size();
-					if (size <= i) {
-						//create new 'i'
-						std::array<uint64_t, MINMAX> minmax;
-						minmax[MIN] = values[i];
-						minmax[MAX] = values[i];
-						globalStats[o.relationId].emplace_back(minmax);
-					} else {
-
-						auto& minmax = globalStats[o.relationId][i];
-						if (minmax[MIN] > values[i]) {
-							minmax[MIN] = values[i];
-						} else if (minmax[MAX] < values[i]) {
-							minmax[MAX] = values[i];
-						}
-					}
+			auto rel = relations[o->relationId].find(*key);
+			if (rel != relations[o->relationId].end()) {
+				for (auto k = 0; k != schema[o->relationId]; ++k) {
+					cerr << " " << k<< "(" << rel->second[k] << ")";
 
 				}
 
-				/*****************************************************/
-				//save stats
-				/*****************************************************/
+			}
+		}
+		reader1 += sizeof(TransactionOperationDelete)
+		+ (sizeof(uint64_t) * o->rowCount);
 
-				operations[o.relationId].emplace_back(move(rel->second));
-				relations[o.relationId].erase(rel);
+	}
+	cerr << "] ";
+	k = 0;
+	for (auto dindex = 0; dindex != t.insertCount; ++dindex) {
+		auto ins = reinterpret_cast<const TransactionOperationInsert*>(reader1);
+		cerr << "[" << ins->relationId << "]";
+		for (const uint64_t* values = ins->values, *valuesLimit = values
+				+ (ins->rowCount * schema[ins->relationId]);
+				values != valuesLimit; values += schema[ins->relationId]) {
+			for (auto k = 0; k != schema[ins->relationId]; ++k) {
+				cerr << " " << k<< "(" << values[k] << ")";
+
+			}
+		}
+
+		reader1 += sizeof(TransactionOperationInsert)
+		+ (sizeof(uint64_t) * ins->rowCount * schema[ins->relationId]);
+
+	}
+	cerr << "]" << endl;
+#endif
+	vector<uint64_t*>* operations = new vector<uint64_t*> [relationCount];
+	uint32_t index;
+	const TransactionOperationDelete* o;
+	const TransactionOperationInsert* ins;
+	std::unordered_map<uint32_t, uint64_t *, hash<unsigned int>,
+			equal_to<uint32_t>, allocator<pair<const uint32_t, uint64_t *>>> ::iterator rel;
+	uint64_t* tuple;
+	uint32_t i;
+	const char* reader = t.operations;
+
+	// Delete all indicated tuples
+	for (index = 0; index != t.deleteCount; ++index) {
+		o = reinterpret_cast<const TransactionOperationDelete*>(reader);
+		for (const uint64_t* key = o->keys, *keyLimit = key + o->rowCount;
+				key != keyLimit; ++key) {
+			rel = relations[o->relationId].find(*key);
+			if (rel != relations[o->relationId].end()) {
+				operations[o->relationId].emplace_back(move(rel->second));
+				relations[o->relationId].erase(rel);
 			}
 		}
 		reader += sizeof(TransactionOperationDelete)
-				+ (sizeof(uint64_t) * o.rowCount);
+				+ (sizeof(uint64_t) * o->rowCount);
 	}
 
 	// Insert new tuples
-	for (uint32_t index = 0; index != t.insertCount; ++index) {
-		auto& o = *reinterpret_cast<const TransactionOperationInsert*>(reader);
-		for (const uint64_t* values = o.values, *valuesLimit = values
-				+ (o.rowCount * schema[o.relationId]); values != valuesLimit;
-				values += schema[o.relationId]) {
-			uint64_t* tuple = new uint64_t[schema[o.relationId]];
-			memcpy(tuple, values, schema[o.relationId] * sizeof(uint64_t));
-			operations[o.relationId].emplace_back(tuple);
-			relations[o.relationId][values[0]] = tuple;
-
-			/*****************************************************/
+	for (index = 0; index != t.insertCount; ++index) {
+		ins = reinterpret_cast<const TransactionOperationInsert*>(reader);
+		for (const uint64_t* values = ins->values, *valuesLimit = values
+				+ (ins->rowCount * schema[ins->relationId]);
+				values != valuesLimit; values += schema[ins->relationId]) {
+			tuple = new uint64_t[schema[ins->relationId]];
+			memcpy(tuple, values, schema[ins->relationId] * sizeof(uint64_t));
+			operations[ins->relationId].emplace_back(tuple);
+			relations[ins->relationId][values[0]] = tuple;
 			//save stats
-			/*****************************************************/
-			for (uint32_t i = 0; i != schema[o.relationId]; ++i) {
-				/////////////////////////////////////////////
-				//Local stats
-				/////////////////////////////////////////////
-/*				auto size = tLocalMap[o.relationId].size();
-				if (size <= i) {
-					//create new 'i'
-					std::array<uint64_t, MINMAX> minmax;
-					minmax[MIN] = values[i];
-					minmax[MAX] = values[i];
-					tLocalMap[o.relationId].emplace_back(move(minmax));
+			for (i = 0; i != schema[ins->relationId]; ++i) {
+#ifdef HISTOGRAM
+				if (histogram.find(values[i]) == histogram.end()) {
+					histogram[values[i]] = 1;
 				} else {
-
-					auto& minmax = tLocalMap[o.relationId][i];
-					if (minmax[MIN] > values[i]) {
-						minmax[MIN] = values[i];
-					} else if (minmax[MAX] < values[i]) {
-						minmax[MAX] = values[i];
-					}
+					histogram[values[i]] = histogram[values[i]] + 1;
 				}
-				*/
-				/////////////////////////////////////////////
-				//Global stats
-				/////////////////////////////////////////////
-				auto size = globalStats[o.relationId].size();
-				if (size <= i) {
-					//create new 'i'
-					std::array<uint64_t, MINMAX> minmax;
+#endif
+				if (transactionStats[ins->relationId].find(i)
+						== transactionStats[ins->relationId].end()) {
+					auto& minmax = transactionStats[ins->relationId][i];
 					minmax[MIN] = values[i];
 					minmax[MAX] = values[i];
-					globalStats[o.relationId].emplace_back(minmax);
 				} else {
-
-					auto& minmax = globalStats[o.relationId][i];
-					if (minmax[MIN] > values[i]) {
+					auto& minmax = transactionStats[ins->relationId][i];
+					if (minmax[MIN] > values[i])
 						minmax[MIN] = values[i];
-					} else if (minmax[MAX] < values[i]) {
+					else if (minmax[MAX] < values[i])
 						minmax[MAX] = values[i];
-					}
 				}
 			}
-			/*****************************************************/
-			//save stats
-			/*****************************************************/
-
 		}
+
 		reader += sizeof(TransactionOperationInsert)
-				+ (sizeof(uint64_t) * o.rowCount * schema[o.relationId]);
+				+ (sizeof(uint64_t) * ins->rowCount * schema[ins->relationId]);
 	}
 
 	transactionHistory[t.transactionId] = operations;
 }
 //--------------------------------------------------
+
 static void processValidationQueries(const ValidationQueries& v) {
 
 #ifdef DEBUG
@@ -260,49 +233,32 @@ static void processValidationQueries(const ValidationQueries& v) {
 	auto to = transactionHistory.upper_bound(v.to);
 	bool conflict = false;
 	const char* reader = v.queries;
-	unordered_map<uint32_t, vector<std::array<uint64_t, MINMAX>>>* ranged=NULL;
-///////////////////////////////////////////////////////////////////////
-//Sort the query based on the validation's query count
-///////////////////////////////////////////////////////////////////////
 	Query* queries[v.queryCount];
 	uint32_t pos = 0;
+	uint32_t index;
+	Query *q;
+	stx::btree_map<uint64_t, vector<uint64_t*>*>::iterator iter;
+	bool match;
+	Query::Column * c;
+	Query::Column * cLimit;
+	uint64_t tupleValue;
+	uint64_t queryValue;
+	bool result;
 
-	for (unsigned index = 0; index != v.queryCount; ++index) {
-		auto q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
-
-		if (isGlobalQueryValid(q)) {
+	for (index = 0; index != v.queryCount; ++index) {
+		q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
+		if (isQueryValid(q)) {
 			queries[pos] = q;
-			pos++;
-		}/* else {
-			if (ranged == NULL
-					&& (v.to - v.from) < 100) {
-		//	cerr<<v.queryCount<<","<<(v.to - v.from)<<endl;
-				ranged = rangedMinMax(v.from, v.to);
-
-				if (isLocalQueryValid(q, ranged)) {
-					queries[pos] = q;
-					pos++;
-				} else
-
-
-					if (isQueryValid(q)) {
-					queries[pos] = q;
-					pos++;
-				}
-
-			} */else if (isQueryValid(q)) {
-				queries[pos] = q;
-				pos++;
-			}
-//		}
+			++pos;
+		}
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
 
 ///////////////////////////////////////////////////////////////////////
-	//std::sort(queries, queries + pos, queryComparator);
+
 //Iterates through all sorted queries
-	for (unsigned index = 0; index != pos; ++index) {
-		auto q = queries[index];
+	for (index = 0; index != pos; ++index) {
+		q = queries[index];
 		//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
 
 #ifdef DEBUG
@@ -338,77 +294,19 @@ static void processValidationQueries(const ValidationQueries& v) {
 		}
 		cerr << "]"<< endl;
 #endif
-		for (auto iter = from; iter != to; ++iter) {
-			/*			if ((*iter).second[q->relationId].size() == 0)
-			 continue;
-			 if ((*iter).second[q->relationId].size() >= 10) {
-			 auto c = q->columns;
-			 bool match = true;
-			 auto cLimit = c + q->columnCount;
-			 auto tStatsIterEnd = globalStats[q->relationId].end();
-			 for (; c != cLimit; ++c) {
-			 bool result = true;
-			 auto tStatsIter = globalStats[q->relationId].find(
-			 c->column);
 
-			 if (tStatsIter != tStatsIterEnd) {
-			 auto& minmax = tStatsIter->second;
-			 switch (c->op) {
+		for (iter = from; iter != to; ++iter) {
 
-			 case Query::Column::Equal:
-			 if (c->value > minmax[MAX]
-			 || c->value < minmax[MIN]) {
-			 result = false;
-			 }
-			 break;
-			 case Query::Column::NotEqual:
-			 if (c->value == minmax[MAX]
-			 && minmax[MAX] == minmax[MIN]) {
-
-			 result = false;
-			 }
-			 break;
-			 case Query::Column::Less:
-			 if (c->value <= minmax[MIN]) {
-			 result = false;
-			 }
-			 break;
-			 case Query::Column::LessOrEqual:
-
-			 if (c->value < minmax[MIN])
-			 result = false;
-			 break;
-			 case Query::Column::Greater:
-			 if (c->value >= minmax[MAX])
-			 result = false;
-			 break;
-			 case Query::Column::GreaterOrEqual:
-			 if (c->value > minmax[MAX])
-			 result = false;
-			 break;
-			 case Query::Column::Invalid:
-			 break;
-			 }
-			 }
-			 if (!result) {
-			 match = false;
-			 break;
-			 }
-			 }
-			 if (!match)
-			 continue;
-			 }
-			 */
 			for (auto& tuple : (*iter).second[q->relationId]) {
 
-				bool match = true;
-				auto c = q->columns;
+				match = true;
+				c = q->columns;
 
-				auto cLimit = c + q->columnCount;
+				cLimit = c + q->columnCount;
 				for (; c != cLimit; ++c) {
-					uint64_t tupleValue = tuple[c->column];
-					uint64_t queryValue = c->value;
-					bool result = false;
+					tupleValue = tuple[c->column];
+					queryValue = c->value;
+					result = false;
 					switch (c->op) {
 					case Query::Column::Equal:
 						result = (tupleValue == queryValue);
@@ -472,10 +370,10 @@ static void processFlush(const Flush& f) {
 //		queryResults.erase(s);
 //	}
 //	cout.flush();
-
+	char c;
 	while ((!queryResults.empty())
 			&& ((*queryResults.begin()).first <= f.validationId)) {
-		char c = '0' + (*queryResults.begin()).second;
+		c = '0' + (*queryResults.begin()).second;
 		cout.write(&c, 1);
 		queryResults.erase(queryResults.begin());
 	}
@@ -488,45 +386,8 @@ static void processForget(const Forget& f) {
 #endif
 //transactionHistory.erase(transactionHistory.begin(), transactionHistory.find(f.transactionId));
 	while ((!transactionHistory.empty())
-			&& ((*transactionHistory.begin()).first <= f.transactionId)) {
-		//transactionStats.erase(transactionHistory.begin()->first);
+			&& ((*transactionHistory.begin()).first <= f.transactionId))
 		transactionHistory.erase(transactionHistory.begin());
-	}
-	/*
-	 delete[] globalStats;
-	 globalStats = new unordered_map<uint32_t, uint64_t[MINMAX]> [relationCount];
-	 //For each transaction in the transaction stats
-	 for (auto& cur : transactionStats) {
-	 if (cur.first <= f.transactionId)
-	 continue;
-	 //For each relation per transaction
-	 for (auto& relIter : cur.second) {
-	 //Update Global stats
-	 auto tStatsIterEnd = globalStats[relIter.first].end();
-	 for (auto& colIter : relIter.second) {
-	 auto tStatsIter = globalStats[relIter.first].find(
-	 colIter.first);
-	 if (tStatsIter == tStatsIterEnd) {
-	 //create new 'i'
-	 auto& minmax = globalStats[relIter.first][colIter.first];
-	 minmax[MIN] = colIter.second[MIN];
-	 minmax[MAX] = colIter.second[MAX];
-	 } else {
-
-	 auto& minmax = tStatsIter->second;
-
-	 if (minmax[MIN] > colIter.second[MIN]) {
-	 minmax[MIN] = colIter.second[MIN];
-	 }
-	 if (minmax[MAX] < colIter.second[MAX]) {
-	 minmax[MAX] = colIter.second[MAX];
-	 }
-	 }
-
-	 }
-	 }
-	 }
-	 */
 }
 //--------------------------------------------------
 // Read the message body and cast it to the desired type
@@ -559,6 +420,11 @@ int main() {
 // And interpret it
 		switch (head.type) {
 		case MessageHead::Done:
+#ifdef HISTOGRAM
+			for (auto iter : histogram) {
+				cerr << iter.first << "|" << iter.second << endl;
+			}
+#endif
 			return 0;
 		case MessageHead::DefineSchema:
 			processDefineSchema(
