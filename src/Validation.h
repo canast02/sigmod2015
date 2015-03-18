@@ -14,12 +14,11 @@
 #include <array>
 
 #include "Structures.h"
-#include "sparsehash/dense_hash_map.h"
 using namespace std;
 
-extern unordered_map<uint32_t, std::array<uint64_t,MINMAX>>*transactionStats;
+extern std::array<uint64_t, MINMAX>*** transactionStats;
 
-inline static bool isQueryValid(Query* q) {
+static bool isQueryValid(Query* q) {
 	/**
 	 * To value-initialize an object of type T means:
 	 * — if T is a (possibly cv-qualified) class type without a user-provided or deleted default constructor,
@@ -34,14 +33,15 @@ inline static bool isQueryValid(Query* q) {
 	 * and before calling any other dense_hash_map method.
 	 */
 	//opsMap.set_empty_key(0);
+	std::array<uint64_t, MINMAX>* iter;
 	for (unsigned i = 0; i < q->columnCount; i++) {
 		auto curQueryOp = &(q->columns[i]);
 		/**
 		 * In the parallel version the condition is needed
 		 */
-		if (transactionStats[q->relationId].find(curQueryOp->column)
-				!= transactionStats[q->relationId].end()) {
-			auto& minmax = transactionStats[q->relationId][curQueryOp->column];
+		iter = transactionStats[q->relationId][curQueryOp->column];
+		if (iter != NULL) {
+			auto& minmax = *iter;
 			switch (curQueryOp->op) {
 			case Query::Column::Equal:
 				if (curQueryOp->value > minmax[MAX]

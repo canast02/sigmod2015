@@ -32,6 +32,8 @@
 #include <iostream>
 #include <cassert>
 #include <cstdint>
+#include <unordered_map>
+
 #include "btree/btree_map.h"
 #include "stx/btree_map.h"
 
@@ -80,8 +82,7 @@ static uint32_t* schema;
 static unordered_map<uint32_t, uint64_t*> *relations;
 
 //GLOBAL visible to Validation.h
-unordered_map<uint32_t, std::array<uint64_t, MINMAX>> *transactionStats;
-
+std::array<uint64_t, MINMAX>***transactionStats;
 //--------------------------------------------------
 static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
@@ -102,9 +103,9 @@ static void processDefineSchema(const DefineSchema& d) {
 	memcpy(schema, d.columnCounts, sizeof(uint32_t) * d.relationCount);
 	relationCount = d.relationCount;
 	relations = new unordered_map<uint32_t, uint64_t*> [d.relationCount];
-	transactionStats =
-			new unordered_map<uint32_t, std::array<uint64_t, MINMAX>> [d.relationCount];
-
+	transactionStats = new std::array<uint64_t, MINMAX>**[d.relationCount];
+	bzero(transactionStats,
+			(d.relationCount * sizeof(std::array<uint64_t, MINMAX>*)));
 }
 //--------------------------------------------------
 static void processTransaction(const Transaction& t) {
@@ -157,8 +158,7 @@ static void processTransaction(const Transaction& t) {
 	uint32_t index;
 	const TransactionOperationDelete* o;
 	const TransactionOperationInsert* ins;
-	std::unordered_map<uint32_t, uint64_t *, hash<unsigned int>,
-			equal_to<uint32_t>, allocator<pair<const uint32_t, uint64_t *>>> ::iterator rel;
+	unordered_map<uint32_t, uint64_t*>::iterator rel;
 	uint64_t* tuple;
 	uint32_t i;
 	const char* reader = t.operations;
@@ -166,11 +166,12 @@ static void processTransaction(const Transaction& t) {
 	// Delete all indicated tuples
 	for (index = 0; index != t.deleteCount; ++index) {
 		o = reinterpret_cast<const TransactionOperationDelete*>(reader);
+
 		for (const uint64_t* key = o->keys, *keyLimit = key + o->rowCount;
 				key != keyLimit; ++key) {
 			rel = relations[o->relationId].find(*key);
 			if (rel != relations[o->relationId].end()) {
-				operations[o->relationId].emplace_back(move(rel->second));
+				operations[o->relationId].emplace_back(rel->second);
 				relations[o->relationId].erase(rel);
 			}
 		}
@@ -188,6 +189,15 @@ static void processTransaction(const Transaction& t) {
 			memcpy(tuple, values, schema[ins->relationId] * sizeof(uint64_t));
 			operations[ins->relationId].emplace_back(tuple);
 			relations[ins->relationId][values[0]] = tuple;
+
+			if (transactionStats[ins->relationId] == NULL) {
+				transactionStats[ins->relationId] = new std::array<uint64_t,
+				MINMAX>*[schema[ins->relationId]];
+				bzero(transactionStats[ins->relationId],
+						(schema[ins->relationId] * sizeof(std::array<uint64_t,
+						MINMAX>*)));
+			}
+
 			//save stats
 			for (i = 0; i != schema[ins->relationId]; ++i) {
 #ifdef HISTOGRAM
@@ -197,17 +207,20 @@ static void processTransaction(const Transaction& t) {
 					histogram[values[i]] = histogram[values[i]] + 1;
 				}
 #endif
-				if (transactionStats[ins->relationId].find(i)
-						== transactionStats[ins->relationId].end()) {
-					auto& minmax = transactionStats[ins->relationId][i];
+				if (transactionStats[ins->relationId][i] == NULL) {
+					transactionStats[ins->relationId][i] = new std::array<
+							uint64_t,
+							MINMAX>;
+					auto& minmax = *transactionStats[ins->relationId][i];
 					minmax[MIN] = values[i];
 					minmax[MAX] = values[i];
 				} else {
-					auto& minmax = transactionStats[ins->relationId][i];
-					if (minmax[MIN] > values[i])
+					auto& minmax = *transactionStats[ins->relationId][i];
+					if (minmax[MIN] > values[i]) {
 						minmax[MIN] = values[i];
-					else if (minmax[MAX] < values[i])
+					} else if (minmax[MAX] < values[i]) {
 						minmax[MAX] = values[i];
+					}
 				}
 			}
 		}
@@ -247,57 +260,60 @@ static void processValidationQueries(const ValidationQueries& v) {
 
 	for (index = 0; index != v.queryCount; ++index) {
 		q = const_cast<Query*>(reinterpret_cast<const Query*>(reader));
+//		++all;
+
 		if (isQueryValid(q)) {
 			queries[pos] = q;
 			++pos;
 		}
+//		else {
+//			++pruned;
+//		}
 		reader += sizeof(Query) + (sizeof(Query::Column) * q->columnCount);
 	}
 
 ///////////////////////////////////////////////////////////////////////
 
+	for (iter = from; iter != to; ++iter) {
 //Iterates through all sorted queries
-	for (index = 0; index != pos; ++index) {
-		q = queries[index];
-		//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
-
+		for (index = 0; index != pos; ++index) {
+			q = queries[index];
+			//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
 #ifdef DEBUG
-		cerr << "q" << qId << "[ ";
-		qId++;
-		cerr << q->relationId << " ";
-		for (unsigned i = 0; i < q->columnCount; i++) {
-			cerr << "c" << q->columns[i].column << " ";
-			switch (q->columns[i].op) {
-				case Query::Column::Equal:
-				cerr << "= ";
-				break;
-				case Query::Column::NotEqual:
-				cerr << "!= ";
-				break;
-				case Query::Column::Less:
-				cerr << "< ";
-				break;
-				case Query::Column::LessOrEqual:
-				cerr << "<= ";
-				break;
-				case Query::Column::Greater:
-				cerr << "> ";
-				break;
-				case Query::Column::GreaterOrEqual:
-				cerr << ">= ";
-				break;
-				case Query::Column::Invalid:
-				cerr << ".|. ";
-				break;
+			cerr << "q" << qId << "[ ";
+			qId++;
+			cerr << q->relationId << " ";
+			for (unsigned i = 0; i < q->columnCount; i++) {
+				cerr << "c" << q->columns[i].column << " ";
+				switch (q->columns[i].op) {
+					case Query::Column::Equal:
+					cerr << "= ";
+					break;
+					case Query::Column::NotEqual:
+					cerr << "!= ";
+					break;
+					case Query::Column::Less:
+					cerr << "< ";
+					break;
+					case Query::Column::LessOrEqual:
+					cerr << "<= ";
+					break;
+					case Query::Column::Greater:
+					cerr << "> ";
+					break;
+					case Query::Column::GreaterOrEqual:
+					cerr << ">= ";
+					break;
+					case Query::Column::Invalid:
+					cerr << ".|. ";
+					break;
+				}
+				cerr << q->columns[i].value << " ";
 			}
-			cerr << q->columns[i].value << " ";
-		}
-		cerr << "]"<< endl;
+			cerr << "]"<< endl;
 #endif
 
-		for (iter = from; iter != to; ++iter) {
-
-			for (auto& tuple : (*iter).second[q->relationId]) {
+			for (auto& tuple : iter->second[q->relationId]) {
 
 				match = true;
 				c = q->columns;
@@ -425,6 +441,9 @@ int main() {
 				cerr << iter.first << "|" << iter.second << endl;
 			}
 #endif
+
+//			cerr << "All=" << all << " Pruned=" << pruned << " Percentage="
+//					<< pruned / all << endl;
 			return 0;
 		case MessageHead::DefineSchema:
 			processDefineSchema(
