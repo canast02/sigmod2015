@@ -33,9 +33,12 @@
 #include <cassert>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
+#include <set>
 
 #include "btree/btree_map.h"
 #include "stx/btree_map.h"
+#include "stx/btree_set.h"
 
 #include "Validation.h"
 
@@ -84,7 +87,7 @@ static unordered_map<uint32_t, uint64_t*> *relations;
 //GLOBAL visible to Validation.h
 std::array<uint64_t, MINMAX>***transactionStats;
 //--------------------------------------------------
-static stx::btree_map<uint64_t, vector<uint64_t*>*> transactionHistory;
+static stx::btree_map<uint64_t,unordered_map<uint32_t, stx::btree_map<uint64_t, set<uint64_t*>>>*> transactionHistory;
 static btree::btree_map<uint64_t, bool> queryResults;
 
 #ifdef HISTOGRAM
@@ -154,7 +157,8 @@ static void processTransaction(const Transaction& t) {
 	}
 	cerr << "]" << endl;
 #endif
-	vector<uint64_t*>* operations = new vector<uint64_t*> [relationCount];
+	unordered_map<uint32_t, stx::btree_map<uint64_t, set<uint64_t*>>>* operations =
+			new unordered_map<uint32_t, stx::btree_map<uint64_t, set<uint64_t*>>>[relationCount];
 	uint32_t index;
 	const TransactionOperationDelete* o;
 	const TransactionOperationInsert* ins;
@@ -171,7 +175,9 @@ static void processTransaction(const Transaction& t) {
 				key != keyLimit; ++key) {
 			rel = relations[o->relationId].find(*key);
 			if (rel != relations[o->relationId].end()) {
-				operations[o->relationId].emplace_back(rel->second);
+				for(i=0; i!=schema[o->relationId]; ++i) {
+					operations[o->relationId][i][rel->second[i]].insert(rel->second);
+				}
 				relations[o->relationId].erase(rel);
 			}
 		}
@@ -187,8 +193,13 @@ static void processTransaction(const Transaction& t) {
 				values != valuesLimit; values += schema[ins->relationId]) {
 			tuple = new uint64_t[schema[ins->relationId]];
 			memcpy(tuple, values, schema[ins->relationId] * sizeof(uint64_t));
-			operations[ins->relationId].emplace_back(tuple);
 			relations[ins->relationId][values[0]] = tuple;
+
+
+			for(i=0; i!=schema[ins->relationId]; ++i) {
+				operations[ins->relationId][i][values[i]].insert(tuple);
+			}
+
 
 			if (transactionStats[ins->relationId] == NULL) {
 				transactionStats[ins->relationId] = new std::array<uint64_t,
@@ -250,7 +261,7 @@ static void processValidationQueries(const ValidationQueries& v) {
 	uint32_t pos = 0;
 	uint32_t index;
 	Query *q;
-	stx::btree_map<uint64_t, vector<uint64_t*>*>::iterator iter;
+	stx::btree_map<uint64_t, unordered_map<uint32_t, stx::btree_map<uint64_t, set<uint64_t*>>>*>::iterator iter;
 	bool match;
 	Query::Column * c;
 	Query::Column * cLimit;
@@ -276,6 +287,8 @@ static void processValidationQueries(const ValidationQueries& v) {
 
 	for (iter = from; iter != to; ++iter) {
 //Iterates through all sorted queries
+
+
 		for (index = 0; index != pos; ++index) {
 			q = queries[index];
 			//std::sort(q->columns, q->columns + q->columnCount, columnComparator);
@@ -313,63 +326,117 @@ static void processValidationQueries(const ValidationQueries& v) {
 			cerr << "]"<< endl;
 #endif
 
-			for (auto& tuple : iter->second[q->relationId]) {
 
-				match = true;
-				c = q->columns;
+			if(iter->second[q->relationId].size() == 0) continue;
 
-				cLimit = c + q->columnCount;
-				for (; c != cLimit; ++c) {
-					tupleValue = tuple[c->column];
-					queryValue = c->value;
-					result = false;
-					switch (c->op) {
-					case Query::Column::Equal:
-						result = (tupleValue == queryValue);
-						break;
-					case Query::Column::NotEqual:
-						result = (tupleValue != queryValue);
-						break;
-					case Query::Column::Less:
-						result = (tupleValue < queryValue);
-						break;
-					case Query::Column::LessOrEqual:
-						result = (tupleValue <= queryValue);
-						break;
-					case Query::Column::Greater:
-						result = (tupleValue > queryValue);
-						break;
-					case Query::Column::GreaterOrEqual:
-						result = (tupleValue >= queryValue);
-						break;
-					case Query::Column::Invalid:
-//						++invalid;
-						continue;
-//						queryResults[v.validationId] = true;
-//						return;
+			std::set<uint64_t*> *tup = new std::set<uint64_t*>[q->columnCount];
+			std::set<uint64_t*> *intersection = tup;
+
+			match = true;
+			c = q->columns;
+			cLimit = c + q->columnCount;
+			unsigned count = 0;
+			for (; c != cLimit; ++c, ++count) {
+				queryValue = c->value;
+				result = false;
+				stx::btree_map<uint64_t, set<uint64_t*>>::iterator temp;
+
+				switch (c->op) {
+				case Query::Column::Equal: //0
+					if(iter->second[q->relationId][c->column].find(queryValue) != iter->second[q->relationId][c->column].end()){
+						result = true;
+						tup[count].insert(iter->second[q->relationId][c->column][queryValue].begin(),iter->second[q->relationId][c->column][queryValue].end());
 					}
-					if (!result) {
-						match = false;
-						break;
+					break;
+				case Query::Column::NotEqual: //1
+//					if(iter->second[q->relationId][c->column].find(queryValue) == iter->second[q->relationId][c->column].end()) {
+						for(auto r = iter->second[q->relationId][c->column].begin(); r != iter->second[q->relationId][c->column].end(); ++r) {
+							if(r->first == queryValue) continue;
+							result = true;
+							tup[count].insert(r->second.begin(), r->second.end());
+//						}
 					}
+					break;
+				case Query::Column::Less: //2
+					if(iter->second[q->relationId][c->column].begin()->first < queryValue) {
+						result = true;
+						auto bound = iter->second[q->relationId][c->column].upper_bound(queryValue);
+						for(auto r = iter->second[q->relationId][c->column].begin(); r != bound; ++r) {
+							if(r->first < queryValue) {
+								tup[count].insert(r->second.begin(), r->second.end());
+							}
+						}
+					}
+					break;
+				case Query::Column::LessOrEqual: //3
+					if(iter->second[q->relationId][c->column].begin()->first <= queryValue) {
+						result = true;
+						auto bound = iter->second[q->relationId][c->column].upper_bound(queryValue);
+						for(auto r = iter->second[q->relationId][c->column].begin(); r != bound; ++r) {
+							if(r->first <= queryValue) {
+								tup[count].insert(r->second.begin(), r->second.end());
+							}
+						}
+					}
+					break;
+				case Query::Column::Greater: //4
+					temp = iter->second[q->relationId][c->column].lower_bound(queryValue);
+					if(temp != iter->second[q->relationId][c->column].end() && temp->first >= queryValue) {
+						if(temp->first == queryValue){
+							++temp;
+						}
+						if(temp != iter->second[q->relationId][c->column].end()) {
+							result = true;
+							for(; temp != iter->second[q->relationId][c->column].end(); ++temp) {
+								tup[count].insert(temp->second.begin(), temp->second.end());
+							}
+						}
+					}
+					break;
+				case Query::Column::GreaterOrEqual: //5
+					temp = iter->second[q->relationId][c->column].lower_bound(queryValue);
+					if(temp != iter->second[q->relationId][c->column].end() && temp->first >= queryValue) {
+						result = true;
+						for(; temp != iter->second[q->relationId][c->column].end(); ++temp) {
+							tup[count].insert(temp->second.begin(), temp->second.end());
+						}
+					}
+					break;
+				case Query::Column::Invalid:
+					continue;
 				}
-				if (match) {
-					conflict = true;
+				if (!result) {
+					match = false;
 					break;
 				}
-			}
+				else {
+					if(count > 0 && intersection->size() > 0) {
+						vector<uint64_t*> inter(intersection->size() + tup[count].size());
+						vector<uint64_t*>::iterator end = set_intersection(intersection->begin(), intersection->end(), tup[count].begin(), tup[count].end(), inter.begin());
+						inter.resize(end-inter.begin());
 
-			if (conflict) {
+						if(inter.size() == 0) {
+							match = false;
+							break;
+						}
+						intersection->clear();
+						intersection->insert(inter.begin(), inter.end());
+					}
+					else {
+						intersection = tup+count;
+					}
+				}
+			}
+			if (match) {
+				conflict = true;
 				break;
 			}
 		}
-
 		if (conflict) {
 			break;
 		}
 	}
-//	if (invalid > 0)
-//		cerr << "invalid:" << invalid << endl;
+
 	queryResults[v.validationId] = conflict;
 }
 //--------------------------------------------------
